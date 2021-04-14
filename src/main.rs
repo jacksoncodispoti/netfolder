@@ -7,13 +7,23 @@ fn start_server() {
 
 mod client {
     use std::io::{self, Write};
-    fn client_prompt() {
-        print!("> ");
+
+    struct Connection {
+        name: String
+    }
+
+    impl Connection {
+        fn new() -> Connection {
+            Connection{name: String::from("no connection")}
+        }
+    }
+
+    fn client_prompt(connection: &Connection) {
+        print!("({}) > ", connection.name);
         io::stdout().flush().unwrap();
     }
 
     fn run_command(command: &str, args: Vec<&str>) {
-        println!("{} is command", command);
         match command {
             "connect" => {},
             "upload" => {},
@@ -45,15 +55,16 @@ mod client {
     }
 
     fn client_shell() {
+        let mut connection = Connection::new();
+
         loop {
-            client_prompt();
+            client_prompt(&connection);
             let mut line = String::new();
             io::stdin()
                 .read_line(&mut line)
                 .expect("Failed to read line");
 
             let (command, args) = parse_command(&line);
-
             run_command(&command, args);
         }
     }
