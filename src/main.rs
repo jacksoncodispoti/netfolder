@@ -7,6 +7,36 @@ fn start_server() {
 
 mod client {
     use std::io::{self, Write};
+    use std::error::Error;
+    use colour;
+
+    mod error {
+        use std::error::Error;
+        use std::fmt;
+
+        #[derive(Debug)]
+        pub struct ArgError {
+            details: String
+        }
+
+        impl ArgError {
+            pub fn new(msg: &str) -> ArgError {
+                ArgError{details: msg.to_string()}
+            }
+        }
+
+        impl fmt::Display for ArgError {
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                write!(f, "{}", self.details)
+            }
+        }
+
+        impl Error for ArgError {
+            fn description(&self) -> &str {
+                &self.details
+            }
+        }
+    }
 
     struct Connection {
         name: String
@@ -23,15 +53,56 @@ mod client {
         io::stdout().flush().unwrap();
     }
 
-    fn run_command(command: &str, args: Vec<&str>) {
-        match command {
-            "connect" => {},
-            "upload" => {},
-            "download" => {},
-            "delete" => {},
+    fn connect(args: Vec<&str>) -> Result<(), Box<dyn Error>> {
+        if args.len() == 2 {
+            Ok(()) 
+        }
+        else {
+            Err(Box::new(error::ArgError::new("Expected 2 arguments")))
+        }
+    }
 
-            "dir" => {}
-            _ => { println!("Invalid command"); }
+    fn upload(args: Vec<&str>) -> Result<(), Box<dyn Error>> {
+        if args.len() == 1 {
+            Ok(()) 
+        }
+        else {
+            Err(Box::new(error::ArgError::new("Expected 1 argument")))
+        }
+    }
+    fn download(args: Vec<&str>) -> Result<(), Box<dyn Error>> {
+        if args.len() == 1 {
+            Ok(()) 
+        }
+        else {
+            Err(Box::new(error::ArgError::new("Expected 1 argument")))
+        }
+    }
+    fn delete(args: Vec<&str>) -> Result<(), Box<dyn Error>> {
+        if args.len() == 1 {
+            Ok(()) 
+        }
+        else {
+            Err(Box::new(error::ArgError::new("Expected 1 argument")))
+        }
+    }
+    fn dir(args: Vec<&str>) -> Result<(), Box<dyn Error>> {
+        if args.len() == 0 {
+            Ok(()) 
+        }
+        else {
+            Err(Box::new(error::ArgError::new("Expected 0 arguments")))
+        }
+    }
+
+    fn run_command(command: &str, args: Vec<&str>) -> Result<(), Box<dyn Error>> {
+        match command {
+            "connect" => { connect(args) },
+            "upload" => { upload(args) },
+            "download" => { download(args) },
+            "delete" => { delete(args) },
+            "dir" => { dir(args) }
+            _ => { println!("Invalid command"); Ok(()) }
         }
     }
 
@@ -65,7 +136,10 @@ mod client {
                 .expect("Failed to read line");
 
             let (command, args) = parse_command(&line);
-            run_command(&command, args);
+            match run_command(&command, args) {
+                Ok(()) => {},
+                Err(e)  => { colour::red_ln!("{:?}", e)}
+            }
         }
     }
 
