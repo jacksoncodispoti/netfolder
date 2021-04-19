@@ -29,7 +29,7 @@ mod error {
 }
 mod net {
     use std::net::{self, TcpStream};
-    use byteorder::{LittleEndian, WriteBytesExt};
+    use byteorder::{ByteOrder, LittleEndian, WriteBytesExt};
     use std::mem;
 
     pub const PACKET_SIZE: usize = 512;
@@ -119,10 +119,31 @@ mod net {
             .write_u64::<LittleEndian>(bytes_t)
             .expect("Unable to write to packet");
 
+        for i in 0..8 {
+            packet[3 + i] = b1[i];
+        }
+
         let mut b2 = [0u8; mem::size_of::<u64>()];
         b2.as_mut()
             .write_u64::<LittleEndian>(bytes_s)
             .expect("Unable to write to packet");
+        for i in 0..8 {
+            packet[11 + i] = b2[i];
+        }
+    }
+
+    pub fn parse_data(packet: [u8; PACKET_SIZE]) -> (u16, u64, usize) {
+        let b1 = packet[1] as u16;
+        let b2 = packet[2] as u16;
+        let id = (b2 << 8) | b1;
+
+        let transmitted = &packet[3..11];
+        let total = &packet[11..20];
+
+        let transmitted_u = LittleEndian::read_u64(transmitted);
+        let total_u = LittleEndian::read_u64(total);
+
+        (id, transmitted_u, total_u as usize)
     }
 
     pub fn parse_redirect(packet: [u8; PACKET_SIZE]) -> (u16, String) {
@@ -218,6 +239,7 @@ mod encoding {
     use std::fs::File;
     use std::io::{Read, Write, Seek};
     use crate::net;
+    use std::num::Wrapping;
 
     //Reads from TcpStream, writes to File
     pub struct FileReceiver {
@@ -234,15 +256,29 @@ mod encoding {
             let mut file = File::create(file_name).expect("File error");
             println!("Writing to {}", file_name);
 
+            let mut current_bytes =0;
             loop {
                 let bytes = stream.peek(&mut buf);
                 let command = net::parse_packet(&buf) as u8;
 
                 if command == (net::Code::Data as u8) {
-                    stream.read(&mut buf);
-                    file.write(&buf[net::DATA_OFFSET..]);
+                    println!("\t{}/{}", current_bytes, 000000);
+                    let bytes = stream.read(&mut buf).unwrap();
+                    let (id, trans, size) = net::parse_data(buf);
+
+                    if current_bytes + bytes >= size {
+                        let rem = size - current_bytes;
+                        println!("Current size is {} vs {} {:?} left", current_bytes, size, rem);
+                        file.write(&buf[net::DATA_OFFSET..(net::DATA_OFFSET + rem)]);
+                        break;
+                    }
+                    else {
+                        file.write(&buf[net::DATA_OFFSET..]);
+                    }
+                    current_bytes += bytes - net::DATA_OFFSET;
                 }
                 else {
+                    println!("Exiting with command {}", command);
                     break;
                 }
             }
@@ -267,8 +303,11 @@ mod encoding {
             let mut file = File::open(path).expect("File Error");
             let size = file.metadata().expect("File Error").len() as u64;
 
+            println!("Hosting file {}", path);
+
             let mut packet = [0; net::PACKET_SIZE];
             packet[0] = net::Code::Data as u8;
+            stream.set_write_timeout(Some(std::time::Duration::new(1, 0)));
 
             let mut current_bytes: u64 = 0;
             loop {
@@ -277,6 +316,7 @@ mod encoding {
                 match bytes {
                     Ok(bytes) => {
                         if bytes != 0 {
+                            println!("\t{}/{}", current_bytes, size);
                             net::mod_data(&mut packet, 0x01, current_bytes, size);
                             stream.write(&packet).expect("Network error");
                             current_bytes += bytes as u64;
@@ -320,8 +360,10 @@ mod server {
             loop {
                 match self.stream.read(&mut buf) {
                     Ok(size) => {
-                        let code = net::parse_packet(&buf);
-                        self.handle_command(&mut transmitter, &mut receiver, code, buf);
+                        if size != 0 {
+                            let code = net::parse_packet(&buf);
+                            self.handle_command(&mut transmitter, &mut receiver, code, buf);
+                        }
                     },
                     Err(_e) => {}
                 }
