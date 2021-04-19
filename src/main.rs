@@ -49,6 +49,37 @@ mod net {
         packet
     }
 
+    pub fn create_upload(file_name: &str, id: u16) -> [u8; PACKET_SIZE] {
+        let mut packet = [0; PACKET_SIZE];
+        packet[0] = Code::Upload as u8;
+        packet[1] = id as u8;
+        packet[2] = (id >> 8) as u8;
+
+        for (i, c) in file_name.as_bytes().iter().enumerate() {
+            packet[3 + i] = *c;
+        }
+
+        packet
+    }
+
+    pub fn parse_upload(packet: &[u8; PACKET_SIZE]) -> (String, u16) {
+        let b1 = packet[1] as u16;
+        let b2 = packet[2] as u16;
+        let id = (b2 << 8) | b1;
+        
+        let mut name = String::new();
+        for i in 3..PACKET_SIZE {
+            if packet[i] != 0 {
+                name.push(packet[i] as char);
+            }
+            else {
+                break;
+            }
+        }
+
+        (name, id)
+    }
+
     pub fn create_error() -> [u8; PACKET_SIZE] {
         let mut packet = [0; PACKET_SIZE];
         packet[0] = Code::Error as u8;
@@ -94,10 +125,11 @@ mod net {
             .expect("Unable to write to packet");
     }
 
-    pub fn parse_redirect(packet: [u8; PACKET_SIZE]) -> u16 {
+    pub fn parse_redirect(packet: [u8; PACKET_SIZE]) -> (u16, String) {
         let b1 = packet[1] as u16;
         let b2 = packet[2] as u16;
-        (b2 << 8) | b1
+
+        ((b2 << 8) | b1, String::from("main.rs"))
     }
 
     pub fn parse_delete(packet: [u8; PACKET_SIZE]) -> String {
@@ -140,7 +172,7 @@ mod net {
         }
     }
 
-    pub fn parse_packet(packet: [u8; PACKET_SIZE]) -> Code {
+    pub fn parse_packet(packet: &[u8; PACKET_SIZE]) -> Code {
         if packet.len() < 1 {
             Code::Unknown
         }
@@ -197,8 +229,24 @@ mod encoding {
             FileReceiver {}
         }
 
-        pub fn get_file(&mut self, port: u16, stream: &mut TcpStream) {
+        pub fn get_file(&mut self, file_name: &str, port: u16, stream: &mut TcpStream) {
+            let mut buf = [0; net::PACKET_SIZE];
+            let mut file = File::create(file_name).expect("File error");
+            println!("Writing to {}", file_name);
 
+            loop {
+                let bytes = stream.peek(&mut buf);
+                let command = net::parse_packet(&buf) as u8;
+
+                if command == (net::Code::Data as u8) {
+                    stream.read(&mut buf);
+                    file.write(&buf[net::DATA_OFFSET..]);
+                }
+                else {
+                    break;
+                }
+            }
+            println!("Received file");
         }
 
         pub fn delete_file(&self, file_name: String) {
@@ -216,7 +264,6 @@ mod encoding {
         }
 
         pub fn host_file(&mut self, path: &str, stream: &mut TcpStream) -> u16 {
-            println!("HOsting file");
             let mut file = File::open(path).expect("File Error");
             let size = file.metadata().expect("File Error").len() as u64;
 
@@ -273,7 +320,7 @@ mod server {
             loop {
                 match self.stream.read(&mut buf) {
                     Ok(size) => {
-                        let code = net::parse_packet(buf);
+                        let code = net::parse_packet(&buf);
                         self.handle_command(&mut transmitter, &mut receiver, code, buf);
                     },
                     Err(_e) => {}
@@ -284,6 +331,11 @@ mod server {
         fn handle_command(&mut self, transmitter: &mut FileTransmitter, receiver: &mut FileReceiver, command: Code, packet: [u8; net::PACKET_SIZE]) -> [u8; net::PACKET_SIZE] {
             println!("\tGot code {:?}", command);
             match command {
+                Code::Upload => {
+                    let (name, id) = net::parse_upload(&packet);
+                    let res = receiver.get_file(&name, id, &mut self.stream);
+                    net::create_okay()
+                },
                 Code::Delete => {
                     let arg = net::parse_delete(packet);
                     let res = receiver.delete_file(arg);
@@ -295,8 +347,8 @@ mod server {
                     net::create_okay()
                 },
                 Code::Redirect => {
-                    let port = net::parse_redirect(packet);
-                    let result = receiver.get_file(port, &mut self.stream);
+                    let (port, filename) = net::parse_redirect(packet);
+                    let result = receiver.get_file(&filename, port, &mut self.stream);
                     net::create_okay()
                 },
                 Code::Download => {
@@ -375,6 +427,8 @@ mod client {
 
     fn upload(transmitter: &mut FileTransmitter, args: Vec<&str>, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
         if args.len() == 1 {
+            let upload_packet = net::create_upload(args[0], 0x1);
+            stream.write(&upload_packet);
             transmitter.host_file(args[0], stream);
             Ok(()) 
         }
@@ -385,7 +439,7 @@ mod client {
 
     fn download(receiver: &mut FileReceiver, args: Vec<&str>, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
         if args.len() == 1 {
-            receiver.get_file(0, stream);
+            receiver.get_file("NOFILE.txt", 0, stream);
             Ok(()) 
         }
         else {
