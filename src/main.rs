@@ -32,6 +32,62 @@ mod net {
 
     pub const PACKET_SIZE: usize = 512;
 
+    pub fn create_redirect(port: u16) -> [u8; PACKET_SIZE] {
+        let mut packet = [0; PACKET_SIZE];
+        packet[0] = Code::Redirect as u8;
+        packet[1] = port as u8;
+        packet[2] = (port >> 8) as u8;
+        packet
+    }
+
+    pub fn create_okay() -> [u8; PACKET_SIZE] {
+        let mut packet = [0; PACKET_SIZE];
+        packet[0] = Code::Okay as u8;
+        packet
+    }
+
+    pub fn create_error() -> [u8; PACKET_SIZE] {
+        let mut packet = [0; PACKET_SIZE];
+        packet[0] = Code::Error as u8;
+        packet
+    }
+
+    pub fn create_delete(file_name: &str) -> [u8; PACKET_SIZE] {
+        let mut packet = [0; PACKET_SIZE];
+        packet[0] = Code::Delete as u8;
+
+        for (i, c) in file_name.as_bytes().iter().enumerate() {
+            packet[i + 1] = *c;
+        }
+
+        packet
+    }
+
+    pub fn create_dir(file_name: &str) -> [u8; PACKET_SIZE] {
+        let mut packet = [0; PACKET_SIZE];
+        packet[0] = Code::Dir as u8;
+
+        for (i, c) in file_name.as_bytes().iter().enumerate() {
+            packet[i + 1] = *c;
+        }
+
+        packet
+    }
+
+    pub fn parse_redirect(packet: [u8; PACKET_SIZE]) -> u16 {
+        let b1 = packet[1] as u16;
+        let b2 = packet[2] as u16;
+        (b2 << 8) | b1
+    }
+
+    pub fn parse_delete(packet: [u8; PACKET_SIZE]) -> String {
+        String::new()
+    }
+
+    pub fn parse_dir(packet: [u8; PACKET_SIZE]) -> String {
+        String::new()
+    }
+
     #[derive(Debug)]
     pub enum Code {
         Unknown=0x0,
@@ -39,7 +95,10 @@ mod net {
         Download=0x2,
         Delete=0x3,
         Dir=0x4,
-        Hello=0x5
+        Hello=0x5,
+        Redirect=0x6,
+        Okay=0x7,
+        Error=0x8
     }
 
     impl Code {
@@ -51,6 +110,7 @@ mod net {
                 0x3 => Code::Delete,
                 0x4 => Code::Dir,
                 0x5 => Code::Hello,
+                0x6 => Code::Redirect,
                 _ => Code::Unknown
             }
         }
@@ -67,14 +127,21 @@ mod net {
 
     pub struct Connection {
         pub name: String,
-        pub stream: Option<ConnectionStream>
+        pub stream: Option<TcpStream>
     }
     impl Connection {
         pub fn new(ip: net::IpAddr, port: u16) -> Connection {
-            Connection{name: String::from("Default name"), stream: Some(ConnectionStream::new(ip, port))}
+            Connection{name: String::from("Default name"), stream: Some(TcpStream::connect((ip, port)).unwrap())}
         }
         pub fn default() -> Connection {
             Connection{ name: String::from("no connection"), stream: None }
+        }
+
+        pub fn connected(&self) -> bool {
+            match &self.stream {
+                Some(_stream) => true,
+                None => false
+            }
         }
     }
 
@@ -90,31 +157,48 @@ mod net {
     }
 }
 mod encoding {
-   use std::net::{TcpStream};
-   pub struct FileEncoder<'a> {
-        stream: &'a mut TcpStream
-   }
+    use std::net::{TcpStream};
 
-   impl FileEncoder<'_> {
-       pub fn new<'a>(stream: &'a mut TcpStream) -> FileEncoder<'a> {
-            FileEncoder {stream: stream}
-       }
-       pub fn add_upload(&self) {
+    //Reads from TcpStream, writes to File
+    pub struct FileReceiver {
 
-       }
+    }
 
-       pub fn add_receive(&self) {
+    impl FileReceiver {
+        pub fn new() -> FileReceiver {
+            FileReceiver {}
+        }
 
-       }
-       
-       pub fn add_send(&self) {
+        pub fn get_file(&mut self, port: u16, stream: &mut TcpStream) {
 
-       }
-   }
+        }
+
+        pub fn delete_file(&self, file_name: String) {
+
+        }
+    }
+
+    //Reads from File, writes to TcpStream
+    pub struct FileTransmitter {
+    }
+
+    impl FileTransmitter {
+        pub fn new() -> FileTransmitter {
+            FileTransmitter {}
+        }
+
+        pub fn host_file(&mut self, stream: &mut TcpStream) -> u16 {
+            0
+        }
+
+        pub fn dir(&self, file_name: String) {
+
+        }
+    }
 }
 mod server {
     use std::net::{TcpListener, TcpStream, IpAddr, SocketAddr, Ipv4Addr};
-    use crate::encoding::FileEncoder;
+    use crate::encoding::{FileReceiver, FileTransmitter};
     use crate::net::{self, Code};
 
     struct Connection {
@@ -128,27 +212,43 @@ mod server {
         }
 
         fn handle(&mut self) {
-            let mut encoder = FileEncoder::new(&mut self.stream);
+            let mut transmitter = FileTransmitter::new();
+            let mut receiver = FileReceiver::new();
+
             let mut buf = [0; net::PACKET_SIZE ];
             loop {
                 match self.stream.peek(&mut buf) {
                     Ok(size) => {
                         let code = net::parse_packet(buf);
+                        self.handle_command(&mut transmitter, &mut receiver, code, buf);
                     },
                     Err(_e) => {}
                 }
             }
         }
 
-        fn handle_command(&mut self, encoder: FileEncoder, command: Code) {
+        fn handle_command(&mut self, transmitter: &mut FileTransmitter, receiver: &mut FileReceiver, command: Code, packet: [u8; net::PACKET_SIZE]) -> [u8; net::PACKET_SIZE] {
             match command {
-                Code::Upload => { encoder.add_receive(); },
-                Code::Download => { encoder.add_send(); },
-                Code::Delete => {},
-                Code::Dir => {},
-                Code::Hello => {},
-                Code::Unknown => { println!("Unknown command!"); }
-                _ => { println!("Unknown command!"); }
+                Code::Delete => {
+                    let arg = net::parse_delete(packet);
+                    let res = receiver.delete_file(arg);
+                    net::create_okay()
+                },
+                Code::Dir => {
+                    let arg = net::parse_dir(packet);
+                    let res = transmitter.dir(arg);
+                    net::create_okay()
+                },
+                Code::Redirect => {
+                    let port = net::parse_redirect(packet);
+                    let result = receiver.get_file(port, &mut self.stream);
+                    net::create_okay()
+                },
+                Code::Download => {
+                    let port = transmitter.host_file(&mut self.stream);
+                    net::create_redirect(port)
+                },
+                _ => { println!("Unknown command!"); net::create_error() }
             }
         }
     }
@@ -192,14 +292,15 @@ mod server {
 }
 mod client {
     use std::io::{self, Write};
+    use std::net::{TcpStream};
     use crate::net;
     use std::error::Error;
     use crate::error;
+    use crate::encoding::{FileTransmitter, FileReceiver};
     use colour;
 
-
-    fn client_prompt(connection: &net::Connection) {
-        print!("({}) > ", connection.name);
+    fn client_prompt(name: &str) {
+        print!("({}) > ", name);
         io::stdout().flush().unwrap();
     }
 
@@ -222,30 +323,36 @@ mod client {
         }
     }
 
-    fn upload(args: Vec<&str>) -> Result<(), Box<dyn Error>> {
+    fn upload(transmitter: &mut FileTransmitter, args: Vec<&str>, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
         if args.len() == 1 {
+            transmitter.host_file(stream);
             Ok(()) 
         }
         else {
             Err(Box::new(error::ArgError::new("Expected 1 argument")))
         }
     }
-    fn download(args: Vec<&str>) -> Result<(), Box<dyn Error>> {
+
+    fn download(receiver: &mut FileReceiver, args: Vec<&str>, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
         if args.len() == 1 {
+            receiver.get_file(0, stream);
             Ok(()) 
         }
         else {
             Err(Box::new(error::ArgError::new("Expected 1 argument")))
         }
     }
+
     fn delete(args: Vec<&str>) -> Result<(), Box<dyn Error>> {
         if args.len() == 1 {
+            let delete_packet = net::create_delete(args[0]);
             Ok(()) 
         }
         else {
             Err(Box::new(error::ArgError::new("Expected 1 argument")))
         }
     }
+
     fn dir(args: Vec<&str>) -> Result<(), Box<dyn Error>> {
         if args.len() == 0 {
             Ok(()) 
@@ -255,18 +362,24 @@ mod client {
         }
     }
 
-    fn run_command(connection: &mut net::Connection, command: &str, args: Vec<&str>) -> Result<(), Box<dyn Error>> {
+    fn pre_run_command(connection: &mut net::Connection, command: &str, args: Vec<&str>) -> Result<(), Box<dyn Error>> {
         match command {
             "connect" => { connect(args, connection) },
-            "upload" => { upload(args) },
-            "download" => { download(args) },
-            "delete" => { delete(args) },
-            "dir" => { dir(args) }
-            _ => { println!("Invalid command"); Ok(()) }
+            _ => { println!("Not connected, invalid command"); Ok(()) }
         }
     }
 
-    fn parse_command<'a>(command: &'a String, connection: &mut net::Connection) -> (String, Vec<&'a str>) {
+    fn run_command(transmitter: &mut FileTransmitter, receiver: &mut FileReceiver, stream: &mut TcpStream, command: &str, args: Vec<&str>) -> Result<(), Box<dyn Error>> {
+        match command {
+            "upload" => { upload(transmitter, args, stream) },
+            "download" => { download(receiver, args, stream) },
+            "delete" => { delete(args) },
+            "dir" => { dir(args) }
+            _ => { println!("Connected, Invalid command"); Ok(()) }
+        }
+    }
+
+    fn parse_command<'a>(command: &'a String) -> (String, Vec<&'a str>) {
         let split = command.trim().split(" ").collect::<Vec<&str>>();
 
         if split.len() == 0 {
@@ -286,19 +399,39 @@ mod client {
     }
 
     fn client_shell() {
-        let mut connection = net::Connection::default();
-
         loop {
-            client_prompt(&connection);
-            let mut line = String::new();
-            io::stdin()
-                .read_line(&mut line)
-                .expect("Failed to read line");
+            let mut connection = net::Connection::default();
+            let mut transmitter = FileTransmitter::new();
+            let mut receiver = FileReceiver::new();
+            while !connection.connected() {
+                client_prompt("not-connected");
+                let mut line = String::new();
+                io::stdin()
+                    .read_line(&mut line)
+                    .expect("Failed to read line");
 
-            let (command, args) = parse_command(&line, &mut connection);
-            match run_command(&mut connection, &command, args) {
-                Ok(()) => {},
-                Err(e)  => { colour::red_ln!("{:?}", e)}
+                let (command, args) = parse_command(&line);
+                match pre_run_command(&mut connection, &command, args) {
+                    Ok(()) => {},
+                    Err(e)  => { colour::red_ln!("{:?}", e)}
+                }
+            }
+
+            let mut stream = connection.stream.expect("This should never happen");
+
+            loop {
+                client_prompt("Connected");
+                let mut line = String::new();
+                io::stdin()
+                    .read_line(&mut line)
+                    .expect("Failed to read line");
+
+                let (command, args) = parse_command(&line);
+                match run_command(&mut transmitter, &mut receiver, &mut stream, &command, args) {
+                    Ok(()) => {},
+                    Err(e)  => { colour::red_ln!("{:?}", e)}
+                }
+                
             }
         }
     }
