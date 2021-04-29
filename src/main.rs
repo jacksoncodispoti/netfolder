@@ -285,7 +285,7 @@ mod encoding {
                 let command = net::parse_packet(&buf) as u8;
 
                 if command == (net::Code::Stdout as u8) {
-                    let bytes = stream.read(&mut buf).unwrap();
+                    stream.read(&mut buf).unwrap();
                     let s = String::from_utf8_lossy(&buf[1..]);
                     print!("{}", s);
                 }
@@ -293,14 +293,27 @@ mod encoding {
                     break;
                 }
             }
+            println!();
         }
 
-        pub fn delete_file(&self, path: &str) {
+        pub fn delete_file(&self, stream: &mut TcpStream, path: &str) {
             let path = Path::new(path);
             match std::fs::remove_file(path) {
-                Ok(result) => {},
-                Err(Os) => { println!("File doesn't exist"); }
-                _ => {}
+                Ok(_result) => {},
+                Err(_os) => {
+                    let mut packet = [0; net::PACKET_SIZE];
+                    packet[0] = net::Code::Stdout as u8;
+                    let mut offset = 1;
+                   
+                    let message = "Unable to delete file";
+                    for b in message.as_bytes().iter() {
+                        packet[offset] = *b;
+                        offset += 1
+                    }
+                    stream.write(&packet).expect("Unable to write to stream");
+                    packet[0] = net::Code::End as u8;
+                    stream.write(&packet).expect("Unable to write to stream");
+                    println!("Unable to delete file"); }
             }
         }
     }
@@ -438,11 +451,11 @@ mod server {
                 },
                 Code::Delete => {
                     let arg = net::parse_delete(packet);
-                    let _res = receiver.delete_file(&arg);
+                    let _res = receiver.delete_file(&mut self.stream, &arg);
                     net::create_okay()
                 },
                 Code::Dir => {
-                    let arg = net::parse_dir(packet);
+                    let _arg = net::parse_dir(packet);
                     let _res = transmitter.dir("./", &mut self.stream);
                     net::create_okay()
                 },
@@ -539,7 +552,7 @@ mod client {
         }
     }
 
-    fn download(receiver: &mut FileReceiver, stream: &mut TcpStream, path: &str) {
+    fn download(receiver: &mut FileReceiver, stream: &mut TcpStream, _path: &str) {
         receiver.get_file("NOFILE.txt", 0, stream);
         //let upload_packet = net::create_upload(path, 0x1);
         //stream.write(&upload_packet).expect("Unable to write to stream");
@@ -555,12 +568,14 @@ mod client {
         }
     }
 
-    fn delete(stream: &mut TcpStream, path: &str) {
+    fn delete(receiver: &mut FileReceiver, stream: &mut TcpStream, path: &str) {
             let delete_packet = net::create_delete(path);
             stream.write(&delete_packet).expect("Network error");
+            receiver.listen(stream);
     }
-    fn shell_delete(args: Vec<&str>, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
+    fn shell_delete(args: Vec<&str>, receiver: &mut FileReceiver, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
         if args.len() == 1 {
+            delete(receiver, stream, args[0]);
             Ok(()) 
         }
         else {
@@ -594,7 +609,7 @@ mod client {
         match command {
             "upload" => { shell_upload(transmitter, args, stream) },
             "download" => { shell_download(receiver, args, stream) },
-            "delete" => { shell_delete(args, stream) },
+            "delete" => { shell_delete(args, receiver, stream) },
             "dir" => { shell_dir(args, receiver, stream) }
             _ => { println!("Connected, Invalid command"); Ok(()) }
         }
@@ -699,7 +714,7 @@ mod client {
 
         if matches.is_present("delete") {
             let path = matches.value_of("delete").unwrap();
-            delete(&mut stream, path); 
+            delete(&mut receiver, &mut stream, path); 
             had_cmd = true;
         }
 
@@ -761,11 +776,11 @@ fn main() {
 
     if let Some(server_matches) = matches.subcommand_matches("server") {
         server::start_server(server_matches);
-        println!("Running the server");
+        //println!("Running the server");
     }
     else if let Some(client_matches) = matches.subcommand_matches("client") {
         client::start_client(client_matches);
-        println!("Running the client");
+        //println!("Running the client");
     }
     else {
         println!("Please specify server or client");
