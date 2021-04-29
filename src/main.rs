@@ -328,9 +328,9 @@ mod stats {
         }
 
         // Return speed in bits
-        pub fn get_speed(&mut self) -> (usize, u64) {
+        pub fn _get_speed(&mut self) -> (usize, u64) {
             // Look at past second
-            const SECOND: u64 = 1000000000;
+            const _SECOND: u64 = 1000000000;
 
             let (last_time, last_bytes) = match self.measures.last() {
                Some((last_time, last_bytes)) => (*last_time, *last_bytes),
@@ -338,7 +338,7 @@ mod stats {
             }; 
 
             if (last_time, last_bytes) != (0, 0) {
-                let threshold = if last_time > SECOND { last_time - SECOND } else { 0 };
+                let threshold = if last_time > _SECOND { last_time - _SECOND } else { 0 };
 
                 let mut c = 0;
                 for m in self.measures.iter() {
@@ -350,7 +350,7 @@ mod stats {
                     }
                 }
 
-                for i in 0..c {
+                for _i in 0..c {
                     self.measures.remove(0);
                 }
 
@@ -358,13 +358,13 @@ mod stats {
                     (last_bytes - start_bytes, last_time - start_time)
                 }
                 else {
-                   (self.current_bytes - last_bytes, SECOND)
+                   (self.current_bytes - last_bytes, _SECOND)
                 }
 
             }
             else {
                 println!("nope");
-               (0, SECOND)
+               (0, _SECOND)
             }
         }
     }
@@ -377,6 +377,7 @@ mod encoding {
     use crate::net;
     use crate::stats;
     use indicatif::{ProgressBar, ProgressStyle};
+    use std::time::Instant;
 
     //Reads from TcpStream, writes to File
     pub struct FileReceiver {
@@ -524,17 +525,23 @@ mod encoding {
             let mut stats = stats::TransferStats::new();
             let mut realtime_stats = stats::RealtimeStats::new();
             let mut current_bytes: u64 = 0;
-            let mut current_packet = 0;
-            loop {
-                current_packet += 1;
-                if (current_packet % 200) == 1 {
-                            let (bytes, time) = realtime_stats.get_speed();
-                            let bits = bytes * 8;
-                            let (bits, rate) = get_rate(bits);
+            let instant = Instant::now();
 
-                            progress.set_message(&format!("[Transfer Rate: {} {}]", bits, rate));
-                            progress.inc(1);
-                            progress.set_position(current_bytes);
+            let mut last_second = 0;
+            let mut last_bytes = 0;
+
+            loop {
+                if instant.elapsed().as_secs() != last_second {
+                    let bytes = current_bytes - last_bytes;
+                    let bits = bytes * 8;
+                    let (bits, rate) = get_rate(bits as usize);
+
+                    progress.set_message(&format!("[Transfer Rate: {} {}]", bits, rate));
+                    progress.inc(1);
+                    progress.set_position(current_bytes);
+
+                    last_second = instant.elapsed().as_secs();
+                    last_bytes = current_bytes;
                 }
                 let bytes = file.read(&mut packet[net::DATA_OFFSET..]);
                 realtime_stats.set_size(size as usize);
