@@ -90,9 +90,9 @@ mod net {
         let id = (b2 << 8) | b1;
 
         let mut name = String::new();
-        for i in 3..PACKET_SIZE {
-            if packet[i] != 0 {
-                name.push(packet[i] as char);
+        for c in packet.iter().take(PACKET_SIZE).skip(3) {
+            if *c != 0 {
+                name.push(*c as char);
             }
             else {
                 break;
@@ -146,17 +146,14 @@ mod net {
             .write_u64::<LittleEndian>(bytes_t)
             .expect("Unable to write to packet");
 
-        for i in 0..8 {
-            packet[3 + i] = b1[i];
-        }
+        packet[3..(8 + 3)].clone_from_slice(&b1[..8]);
 
         let mut b2 = [0u8; mem::size_of::<u64>()];
         b2.as_mut()
             .write_u64::<LittleEndian>(bytes_s)
             .expect("Unable to write to packet");
-        for i in 0..8 {
-            packet[11 + i] = b2[i];
-        }
+
+        packet[11..(8+11)].clone_from_slice(&b2[..8]);
     }
 
     pub fn parse_data(packet: [u8; PACKET_SIZE]) -> (u16, u64, usize) {
@@ -227,7 +224,7 @@ mod net {
     }
 
     pub fn parse_packet(packet: &[u8; PACKET_SIZE]) -> Code {
-        if packet.len() < 1 {
+        if packet.is_empty() {
             Code::Unknown
         }
         else {
@@ -294,9 +291,9 @@ mod stats {
             TransferStats { elapsed: 0.0, bytes: 0, instant: Instant::now() }
         }
 
-        pub fn start(&mut self) {
-            self.instant = Instant::now();
-        }
+        //pub fn start(&mut self) {
+        //    self.instant = Instant::now();
+        //}
 
         pub fn stop(&mut self, bytes: usize) {
             self.elapsed = self.instant.elapsed().as_nanos() as f32 / 1000.0;
@@ -341,11 +338,12 @@ mod encoding {
                     if current_bytes + bytes >= size {
                         let rem = size - current_bytes;
                         //println!("Current size is {} vs {} {:?} left", current_bytes, size, rem);
-                        file.write(&buf[net::DATA_OFFSET..(net::DATA_OFFSET + rem)]).expect("Failed to write to stream");
+                        file.write_all(&buf[net::DATA_OFFSET..(net::DATA_OFFSET + rem)]).expect("Failed to write to stream");
+                        current_bytes += rem;
                         break;
                     }
                     else {
-                        file.write(&buf[net::DATA_OFFSET..]).expect("Failed to write to stream");
+                        file.write_all(&buf[net::DATA_OFFSET..]).expect("Failed to write to stream");
                     }
                     current_bytes += bytes - net::DATA_OFFSET;
                 }
@@ -367,19 +365,19 @@ mod encoding {
                 let command = net::parse_packet(&buf) as u8;
 
                 if command == (net::Code::Redirect as u8) {
-                    stream.read(&mut buf).unwrap();
+                    stream.read_exact(&mut buf).unwrap();
                     let (port, filename) = net::parse_redirect(buf);
                     let stats = self.get_file(&filename, port, stream);
                     println!("{}", stats);
                     break;
                 }
                 else if command == (net::Code::Stdout as u8) {
-                    stream.read(&mut buf).unwrap();
+                    stream.read_exact(&mut buf).unwrap();
                     let s = String::from_utf8_lossy(&buf[1..]);
                     print!("{}", s);
                 }
                 else if command == (net::Code::End as u8) {
-                    stream.read(&mut buf).unwrap();
+                    stream.read_exact(&mut buf).unwrap();
                     break;
                 }
             }
@@ -392,7 +390,7 @@ mod encoding {
                 Ok(_result) => {
                     let mut packet = [0; net::PACKET_SIZE];
                     packet[0] = net::Code::End as u8;
-                    stream.write(&packet).expect("Unable to write to stream");
+                    stream.write_all(&packet).expect("Unable to write to stream");
                 },
                 Err(_os) => {
                     let mut packet = [0; net::PACKET_SIZE];
@@ -404,9 +402,9 @@ mod encoding {
                         packet[offset] = *b;
                         offset += 1
                     }
-                    stream.write(&packet).expect("Unable to write to stream");
+                    stream.write_all(&packet).expect("Unable to write to stream");
                     packet[0] = net::Code::End as u8;
-                    stream.write(&packet).expect("Unable to write to stream");
+                    stream.write_all(&packet).expect("Unable to write to stream");
                     println!("Unable to delete file"); }
             }
         }
@@ -444,7 +442,7 @@ mod encoding {
                         if bytes != 0 {
                             //println!("\t{}/{}", current_bytes, size);
                             net::mod_data(&mut packet, 0x01, current_bytes, size);
-                            stream.write(&packet).expect("Network error");
+                            stream.write_all(&packet).expect("Network error");
                             current_bytes += bytes as u64;
                         }
                         else {
@@ -465,8 +463,7 @@ mod encoding {
 
             let path = Path::new(path);
             for entry in path.read_dir().expect("Reading directory failed") {
-                match entry.expect("Failed to get entry").path().to_str() {
-                    Some(path) => {
+                if let Some(path) = entry.expect("Failed to get entry").path().to_str() {
                         let path  = String::from(path) + "\n";
                         if offset + path.len() >= net::PACKET_SIZE {
                             let fit = path.len() + offset - net::PACKET_SIZE;
@@ -476,7 +473,7 @@ mod encoding {
                                 offset += 1;
                             }
 
-                            stream.write(&packet).expect("Network error");
+                            stream.write_all(&packet).expect("Network error");
 
                             offset = 1;
                             for b in path.as_bytes().iter().skip(fit) {
@@ -491,8 +488,6 @@ mod encoding {
                                 offset += 1
                             }
                         }
-                    },
-                    None => {}
                 }
             }
             if offset != 1 {
@@ -500,9 +495,9 @@ mod encoding {
                     *b = 0;
                 }
             }
-            stream.write(&packet).expect("Network error");
+            stream.write_all(&packet).expect("Network error");
             packet[0] = net::Code::End as u8;
-            stream.write(&packet).expect("Network error");
+            stream.write_all(&packet).expect("Network error");
         }
     }
 }
@@ -519,7 +514,7 @@ mod server {
     impl Connection {
         fn new(stream: TcpStream) -> Connection {
             //let encoder = FileEncoder::new(&mut stream);
-            Connection { stream: stream }
+            Connection { stream }
         }
 
         fn handle(&mut self) {
@@ -567,7 +562,7 @@ mod server {
                 },
                 Code::Download => {
                     let path = net::parse_download(&packet);
-                    self.stream.write(&net::create_redirect(&path, 0)).expect("Network error");
+                    self.stream.write_all(&net::create_redirect(&path, 0)).expect("Network error");
                     let _stats = transmitter.host_file(&path, &mut self.stream);
                     net::create_okay()
                 },
@@ -620,7 +615,6 @@ mod client {
     use crate::error;
     use std::path::Path;
     use crate::encoding::{FileTransmitter, FileReceiver};
-    use colour;
 
     fn client_prompt(name: &str) {
         print!("({}) > ", name);
@@ -643,7 +637,7 @@ mod client {
 
     fn upload(transmitter: &mut FileTransmitter, stream: &mut TcpStream, path: &Path) {
         let upload_packet = net::create_upload(path.file_name().unwrap().to_str().unwrap(), 0x1);
-        stream.write(&upload_packet).expect("Unable to write to stream");
+        stream.write_all(&upload_packet).expect("Unable to write to stream");
         let stats = transmitter.host_file(path.to_str().unwrap(), stream);
         println!("{}", stats);
     }
@@ -660,7 +654,7 @@ mod client {
 
     fn download(receiver: &mut FileReceiver, stream: &mut TcpStream, path: &str) {
         let download_packet = net::create_download(path);
-        stream.write(&download_packet).expect("Unable to write to stream");
+        stream.write_all(&download_packet).expect("Unable to write to stream");
         receiver.listen(stream);
     }
     fn shell_download(receiver: &mut FileReceiver, args: Vec<&str>, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
@@ -675,7 +669,7 @@ mod client {
 
     fn delete(receiver: &mut FileReceiver, stream: &mut TcpStream, path: &str) {
             let delete_packet = net::create_delete(path);
-            stream.write(&delete_packet).expect("Network error");
+            stream.write_all(&delete_packet).expect("Network error");
             receiver.listen(stream);
     }
     fn shell_delete(args: Vec<&str>, receiver: &mut FileReceiver, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
@@ -690,11 +684,11 @@ mod client {
 
     fn dir(receiver: &mut FileReceiver, stream: &mut TcpStream) {
         let dir_packet = net::create_dir("");
-        stream.write(&dir_packet).expect("Network error");
+        stream.write_all(&dir_packet).expect("Network error");
         receiver.listen(stream);
     }
     fn shell_dir(args: Vec<&str>, receiver: &mut FileReceiver, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
-        if args.len() == 0 {
+        if args.is_empty() {
             dir(receiver, stream);
             Ok(()) 
         }
@@ -720,21 +714,21 @@ mod client {
         }
     }
 
-    fn parse_command<'a>(command: &'a String) -> (String, Vec<&'a str>) {
-        let split = command.trim().split(" ").collect::<Vec<&str>>();
+    fn parse_command(command: &'_ str) -> (String, Vec<&'_ str>) {
+        let split = command.trim().split(' ').collect::<Vec<&str>>();
 
-        if split.len() == 0 {
-            return (String::new(), split);
+        if split.is_empty() {
+            (String::new(), split)
         }
         else {
             let mut first = String::from(split[0].trim());
             first.make_ascii_lowercase();
 
             if split.len() == 1 {
-                return (first, Vec::new());
+                (first, Vec::new())
             }
             else {
-                return (first, split.into_iter().skip(1).collect::<Vec<&str>>());
+                (first, split.into_iter().skip(1).collect::<Vec<&str>>())
             }
         }
     }
