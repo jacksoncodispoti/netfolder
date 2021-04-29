@@ -153,8 +153,8 @@ mod net {
         ((b2 << 8) | b1, String::from("main.rs"))
     }
 
-    pub fn parse_delete(_packet: [u8; PACKET_SIZE]) -> String {
-        String::new()
+    pub fn parse_delete(packet: [u8; PACKET_SIZE]) -> String {
+        String::from(String::from_utf8_lossy(&packet[1..]).into_owned().trim().trim_matches(char::from(0)))
     }
 
     pub fn parse_dir(_packet: [u8; PACKET_SIZE]) -> String {
@@ -295,8 +295,13 @@ mod encoding {
             }
         }
 
-        pub fn delete_file(&self, _file_name: String) {
-
+        pub fn delete_file(&self, path: &str) {
+            let path = Path::new(path);
+            match std::fs::remove_file(path) {
+                Ok(result) => {},
+                Err(Os) => { println!("File doesn't exist"); }
+                _ => {}
+            }
         }
     }
 
@@ -433,7 +438,7 @@ mod server {
                 },
                 Code::Delete => {
                     let arg = net::parse_delete(packet);
-                    let _res = receiver.delete_file(arg);
+                    let _res = receiver.delete_file(&arg);
                     net::create_okay()
                 },
                 Code::Dir => {
@@ -550,10 +555,12 @@ mod client {
         }
     }
 
+    fn delete(stream: &mut TcpStream, path: &str) {
+            let delete_packet = net::create_delete(path);
+            stream.write(&delete_packet).expect("Network error");
+    }
     fn shell_delete(args: Vec<&str>, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
         if args.len() == 1 {
-            let delete_packet = net::create_delete(args[0]);
-            stream.write(&delete_packet).expect("Network error");
             Ok(()) 
         }
         else {
@@ -671,22 +678,34 @@ mod client {
         let mut receiver = FileReceiver::new();
         let mut stream = connection.stream.expect("This should never happen");
 
+        let mut had_cmd = false;
+
         if matches.is_present("list") {
             dir(&mut receiver, &mut stream); 
+            had_cmd = true;
         }
 
         if matches.is_present("download") {
             let path = matches.value_of("download").unwrap();
             download(&mut receiver, &mut stream, path); 
+            had_cmd = true;
         }
 
         if matches.is_present("upload") {
             let path = matches.value_of("upload").unwrap();
             upload(&mut transmitter, &mut stream, path); 
+            had_cmd = true;
         }
 
+        if matches.is_present("delete") {
+            let path = matches.value_of("delete").unwrap();
+            delete(&mut stream, path); 
+            had_cmd = true;
+        }
 
-        post_connection_shell(stream, transmitter, receiver);
+        if matches.is_present("shell") || !had_cmd {
+            post_connection_shell(stream, transmitter, receiver);
+        }
     }
 }
 
@@ -721,6 +740,11 @@ fn main() {
                          .short('d')
                          .takes_value(true)
                          .about("The file to download"))
+                    .arg(Arg::new("delete")
+                         .long("delete")
+                         .short('D')
+                         .takes_value(true)
+                         .about("The file to delete"))
                     .arg(Arg::new("list")
                          .long("list")
                          .short('l')
