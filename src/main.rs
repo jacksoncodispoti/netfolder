@@ -1,4 +1,4 @@
-use clap::{App};
+use clap::{App, Arg};
 
 mod error {
     use std::error::Error;
@@ -417,7 +417,7 @@ mod server {
 
     }
 
-    pub fn start_server() {
+    pub fn start_server(_matches: &clap::ArgMatches) {
         let ip = IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0));
         let port = 3219;
         let listener = NetFolderListener::new("TheBlackPearl", ip, port);
@@ -534,11 +534,14 @@ mod client {
         }
     }
 
-    fn client_shell() {
-        loop {
+    fn open_connection(ip_str: &str, port: u16) -> net::Connection {
+            let ip: std::net::IpAddr = ip_str.parse().unwrap();
+
+            net::Connection::new(ip, port)
+    }
+
+    fn pre_connection_shell() -> net::Connection {
             let mut connection = net::Connection::default();
-            let mut transmitter = FileTransmitter::new();
-            let mut receiver = FileReceiver::new();
             while !connection.connected() {
                 client_prompt("not-connected");
                 let mut line = String::new();
@@ -553,6 +556,13 @@ mod client {
                 }
             }
 
+            connection
+    }
+    fn post_connection_shell(connection: net::Connection) {
+        let mut transmitter = FileTransmitter::new();
+        let mut receiver = FileReceiver::new();
+
+        loop {
             let mut stream = connection.stream.expect("This should never happen");
 
             loop {
@@ -571,8 +581,17 @@ mod client {
         }
     }
 
-    pub fn start_client() {
-        client_shell();
+    pub fn start_client(matches: &clap::ArgMatches) {
+        let connection = if matches.is_present("host") && matches.is_present("port") {
+            let host = matches.value_of("host").unwrap();
+            let port: u16 = matches.value_of("port").unwrap().parse().expect("Please provide a valid port");
+            open_connection(host, port)
+        }
+        else {
+            pre_connection_shell()
+        };
+
+        post_connection_shell(connection);
     }
 }
 
@@ -586,17 +605,30 @@ fn main() {
                     .version("0.0.1")
                     .author("Jackson Codispoti <jackson.codispoti@uky.edu>"))
         .subcommand(App::new("client")
+                    .arg(Arg::new("host")
+                         .short('n')
+                         .long("host")
+                         .takes_value(true)
+                         .about("The hostname to connect to"))
+                    .arg(Arg::new("port")
+                         .long("port")
+                         .short('p')
+                         .takes_value(true)
+                         .about("The port to connect to"))
+                    .arg(Arg::new("s")
+                         .takes_value(false)
+                         .about("Forces to start in shell mode. Undefined behaviours"))
                     .about("Launch a client")
                     .version("0.0.1")
                     .author("Jackson Codispoti <jackson.codispoti@uky.edu>"))
         .get_matches();
 
-    if let Some(ref _matches) = matches.subcommand_matches("server") {
-        server::start_server();
+    if let Some(server_matches) = matches.subcommand_matches("server") {
+        server::start_server(server_matches);
         println!("Running the server");
     }
-    else if let Some(ref _matchef) = matches.subcommand_matches("client") {
-        client::start_client();
+    else if let Some(client_matches) = matches.subcommand_matches("client") {
+        client::start_client(client_matches);
         println!("Running the client");
     }
     else {
