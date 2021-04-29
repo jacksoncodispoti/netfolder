@@ -255,12 +255,62 @@ mod net {
         }
     }
 }
+mod stats {
+    use std::time::Instant;
+    use std::fmt;
+
+    #[derive(Debug)]
+    pub struct TransferStats {
+        elapsed: f32,
+        bytes: usize,
+        instant: Instant 
+    }
+
+    impl fmt::Display for TransferStats {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            //Use Kb/s and stuff
+            let bits = self.bytes * 8;
+
+            let (rate, rate_name) = 
+            if bits > 1000000000 {
+                (bits as f32 / 1000000000.0, "Gb")
+            }
+            else if bits > 1000000 {
+                (bits as f32 / 1000000.0, "Mb")
+            }
+            else if bits > 1000 {
+                (bits as f32 / 1000.0, "Kb")
+            }
+            else {
+                (bits as f32, "b")
+            };
+
+            write!(f, "{} {}/s", rate, rate_name)
+        }
+    }
+
+    impl TransferStats {
+        pub fn new() -> TransferStats {
+            TransferStats { elapsed: 0.0, bytes: 0, instant: Instant::now() }
+        }
+
+        pub fn start(&mut self) {
+            self.instant = Instant::now();
+        }
+
+        pub fn stop(&mut self, bytes: usize) {
+            self.elapsed = self.instant.elapsed().as_nanos() as f32 / 1000.0;
+            self.bytes = bytes;
+        }
+    }
+}
 mod encoding {
     use std::net::{TcpStream};
     use std::fs::File;
     use std::path::Path;
     use std::io::{Read, Write};
     use crate::net;
+    use crate::stats;
 
     //Reads from TcpStream, writes to File
     pub struct FileReceiver {
@@ -272,24 +322,25 @@ mod encoding {
             FileReceiver {}
         }
 
-        pub fn get_file(&mut self, file_name: &str, _port: u16, stream: &mut TcpStream) {
+        pub fn get_file(&mut self, file_name: &str, _port: u16, stream: &mut TcpStream) -> stats::TransferStats {
             let mut buf = [0; net::PACKET_SIZE];
             let mut file = File::create(file_name).expect("File error");
             println!("Writing to {}", file_name);
 
+            let mut stats = stats::TransferStats::new();
             let mut current_bytes =0;
             loop {
                 let _bytes = stream.peek(&mut buf);
                 let command = net::parse_packet(&buf) as u8;
 
                 if command == (net::Code::Data as u8) {
-                    println!("\t{}/{}", current_bytes, 000000);
+                    //println!("\t{}/{}", current_bytes, 000000);
                     let bytes = stream.read(&mut buf).unwrap();
                     let (_id, _trans, size) = net::parse_data(buf);
 
                     if current_bytes + bytes >= size {
                         let rem = size - current_bytes;
-                        println!("Current size is {} vs {} {:?} left", current_bytes, size, rem);
+                        //println!("Current size is {} vs {} {:?} left", current_bytes, size, rem);
                         file.write(&buf[net::DATA_OFFSET..(net::DATA_OFFSET + rem)]).expect("Failed to write to stream");
                         break;
                     }
@@ -303,7 +354,9 @@ mod encoding {
                     break;
                 }
             }
+            stats.stop(current_bytes);
             println!("Received file");
+            stats
         }
 
         pub fn listen(&mut self, stream: &mut TcpStream) {
@@ -316,7 +369,8 @@ mod encoding {
                 if command == (net::Code::Redirect as u8) {
                     stream.read(&mut buf).unwrap();
                     let (port, filename) = net::parse_redirect(buf);
-                    self.get_file(&filename, port, stream);
+                    let stats = self.get_file(&filename, port, stream);
+                    println!("{}", stats);
                     break;
                 }
                 else if command == (net::Code::Stdout as u8) {
@@ -367,16 +421,20 @@ mod encoding {
             FileTransmitter {}
         }
 
-        pub fn host_file(&mut self, path: &str, stream: &mut TcpStream) -> u16 {
-            let mut file = File::open(path).expect("File Error");
+        pub fn host_file(&mut self, path: &str, stream: &mut TcpStream) -> stats::TransferStats {
+            let path = Path::new(path).canonicalize().expect("Failed to canonicalize path");
+            println!("{:?}", path);
+
+            let mut file = File::open(&path).expect("File Error");
             let size = file.metadata().expect("File Error").len() as u64;
 
-            println!("Hosting file {}", path);
+            println!("Hosting file {:?}", &path);
 
             let mut packet = [0; net::PACKET_SIZE];
             packet[0] = net::Code::Data as u8;
             stream.set_write_timeout(Some(std::time::Duration::new(1, 0))).expect("Unable to set write timeout");
 
+            let mut stats = stats::TransferStats::new();
             let mut current_bytes: u64 = 0;
             loop {
                 let bytes = file.read(&mut packet[net::DATA_OFFSET..]);
@@ -384,7 +442,7 @@ mod encoding {
                 match bytes {
                     Ok(bytes) => {
                         if bytes != 0 {
-                            println!("\t{}/{}", current_bytes, size);
+                            //println!("\t{}/{}", current_bytes, size);
                             net::mod_data(&mut packet, 0x01, current_bytes, size);
                             stream.write(&packet).expect("Network error");
                             current_bytes += bytes as u64;
@@ -396,7 +454,8 @@ mod encoding {
                     Err(_e) => {}
                 }
             }
-            0
+            stats.stop(current_bytes as usize);
+            stats
         }
 
         pub fn dir(&self, path: &str, stream: &mut TcpStream) {
@@ -486,7 +545,8 @@ mod server {
             match command {
                 Code::Upload => {
                     let (name, id) = net::parse_upload(&packet);
-                    let _res = receiver.get_file(&name, id, &mut self.stream);
+                    let stats = receiver.get_file(&name, id, &mut self.stream);
+                    println!("{}", stats);
                     net::create_okay()
                 },
                 Code::Delete => {
@@ -501,13 +561,14 @@ mod server {
                 },
                 Code::Redirect => {
                     let (port, filename) = net::parse_redirect(packet);
-                    let _result = receiver.get_file(&filename, port, &mut self.stream);
+                    let stats = receiver.get_file(&filename, port, &mut self.stream);
+                    println!("{}", stats);
                     net::create_okay()
                 },
                 Code::Download => {
                     let path = net::parse_download(&packet);
                     self.stream.write(&net::create_redirect(&path, 0)).expect("Network error");
-                    transmitter.host_file(&path, &mut self.stream);
+                    let _stats = transmitter.host_file(&path, &mut self.stream);
                     net::create_okay()
                 },
                 _ => { println!("Unknown command!"); net::create_error() }
@@ -557,6 +618,7 @@ mod client {
     use crate::net;
     use std::error::Error;
     use crate::error;
+    use std::path::Path;
     use crate::encoding::{FileTransmitter, FileReceiver};
     use colour;
 
@@ -579,14 +641,16 @@ mod client {
         }
     }
 
-    fn upload(transmitter: &mut FileTransmitter, stream: &mut TcpStream, path: &str) {
-        let upload_packet = net::create_upload(path, 0x1);
+    fn upload(transmitter: &mut FileTransmitter, stream: &mut TcpStream, path: &Path) {
+        let upload_packet = net::create_upload(path.file_name().unwrap().to_str().unwrap(), 0x1);
         stream.write(&upload_packet).expect("Unable to write to stream");
-        transmitter.host_file(path, stream);
+        let stats = transmitter.host_file(path.to_str().unwrap(), stream);
+        println!("{}", stats);
     }
     fn shell_upload(transmitter: &mut FileTransmitter, args: Vec<&str>, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
         if args.len() == 1 {
-            upload(transmitter, stream, args[0]);
+            let path = Path::new(args[0]);
+            upload(transmitter, stream, &path);
             Ok(()) 
         }
         else {
@@ -748,8 +812,8 @@ mod client {
         }
 
         if matches.is_present("upload") {
-            let path = matches.value_of("upload").unwrap();
-            upload(&mut transmitter, &mut stream, path); 
+            let path = Path::new(matches.value_of("upload").unwrap());
+            upload(&mut transmitter, &mut stream, &path); 
             had_cmd = true;
         }
 
