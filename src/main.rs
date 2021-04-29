@@ -153,11 +153,11 @@ mod net {
         ((b2 << 8) | b1, String::from("main.rs"))
     }
 
-    pub fn parse_delete(packet: [u8; PACKET_SIZE]) -> String {
+    pub fn parse_delete(_packet: [u8; PACKET_SIZE]) -> String {
         String::new()
     }
 
-    pub fn parse_dir(packet: [u8; PACKET_SIZE]) -> String {
+    pub fn parse_dir(_packet: [u8; PACKET_SIZE]) -> String {
         String::new()
     }
 
@@ -221,25 +221,12 @@ mod net {
             }
         }
     }
-
-    pub struct ConnectionStream {
-        stream: TcpStream
-    }
-
-    impl ConnectionStream {
-        pub fn new(ip: net::IpAddr, port: u16) -> ConnectionStream {
-            let stream = TcpStream::connect((ip, port));
-            ConnectionStream{stream: stream.unwrap()}
-        }
-    }
 }
 mod encoding {
     use std::net::{TcpStream};
-    use std::fs;
     use std::fs::File;
-    use std::io::{Read, Write, Seek};
+    use std::io::{Read, Write};
     use crate::net;
-    use std::num::Wrapping;
 
     //Reads from TcpStream, writes to File
     pub struct FileReceiver {
@@ -251,29 +238,29 @@ mod encoding {
             FileReceiver {}
         }
 
-        pub fn get_file(&mut self, file_name: &str, port: u16, stream: &mut TcpStream) {
+        pub fn get_file(&mut self, file_name: &str, _port: u16, stream: &mut TcpStream) {
             let mut buf = [0; net::PACKET_SIZE];
             let mut file = File::create(file_name).expect("File error");
             println!("Writing to {}", file_name);
 
             let mut current_bytes =0;
             loop {
-                let bytes = stream.peek(&mut buf);
+                let _bytes = stream.peek(&mut buf);
                 let command = net::parse_packet(&buf) as u8;
 
                 if command == (net::Code::Data as u8) {
                     println!("\t{}/{}", current_bytes, 000000);
                     let bytes = stream.read(&mut buf).unwrap();
-                    let (id, trans, size) = net::parse_data(buf);
+                    let (_id, _trans, size) = net::parse_data(buf);
 
                     if current_bytes + bytes >= size {
                         let rem = size - current_bytes;
                         println!("Current size is {} vs {} {:?} left", current_bytes, size, rem);
-                        file.write(&buf[net::DATA_OFFSET..(net::DATA_OFFSET + rem)]);
+                        file.write(&buf[net::DATA_OFFSET..(net::DATA_OFFSET + rem)]).expect("Failed to write to stream");
                         break;
                     }
                     else {
-                        file.write(&buf[net::DATA_OFFSET..]);
+                        file.write(&buf[net::DATA_OFFSET..]).expect("Failed to write to stream");
                     }
                     current_bytes += bytes - net::DATA_OFFSET;
                 }
@@ -285,7 +272,7 @@ mod encoding {
             println!("Received file");
         }
 
-        pub fn delete_file(&self, file_name: String) {
+        pub fn delete_file(&self, _file_name: String) {
 
         }
     }
@@ -307,7 +294,7 @@ mod encoding {
 
             let mut packet = [0; net::PACKET_SIZE];
             packet[0] = net::Code::Data as u8;
-            stream.set_write_timeout(Some(std::time::Duration::new(1, 0)));
+            stream.set_write_timeout(Some(std::time::Duration::new(1, 0))).expect("Unable to set write timeout");
 
             let mut current_bytes: u64 = 0;
             loop {
@@ -331,7 +318,7 @@ mod encoding {
             0
         }
 
-        pub fn dir(&self, file_name: String) {
+        pub fn dir(&self, _file_name: String) {
 
         }
     }
@@ -375,22 +362,22 @@ mod server {
             match command {
                 Code::Upload => {
                     let (name, id) = net::parse_upload(&packet);
-                    let res = receiver.get_file(&name, id, &mut self.stream);
+                    let _res = receiver.get_file(&name, id, &mut self.stream);
                     net::create_okay()
                 },
                 Code::Delete => {
                     let arg = net::parse_delete(packet);
-                    let res = receiver.delete_file(arg);
+                    let _res = receiver.delete_file(arg);
                     net::create_okay()
                 },
                 Code::Dir => {
                     let arg = net::parse_dir(packet);
-                    let res = transmitter.dir(arg);
+                    let _res = transmitter.dir(arg);
                     net::create_okay()
                 },
                 Code::Redirect => {
                     let (port, filename) = net::parse_redirect(packet);
-                    let result = receiver.get_file(&filename, port, &mut self.stream);
+                    let _result = receiver.get_file(&filename, port, &mut self.stream);
                     net::create_okay()
                 },
                 Code::Download => {
@@ -403,14 +390,14 @@ mod server {
     }
 
     pub struct NetFolderListener {
-        name: String,
+        _name: String,
         listener: TcpListener
     }
 
     impl NetFolderListener {
         pub fn new(name: &str, ip: IpAddr, port: u16) -> NetFolderListener {
             let addr = SocketAddr::from((ip, port));
-            NetFolderListener{ name: String::from(name), listener: TcpListener::bind(addr).unwrap() }
+            NetFolderListener{ _name: String::from(name), listener: TcpListener::bind(addr).unwrap() }
         }
 
         pub fn connection_loop(&self) {
@@ -470,7 +457,7 @@ mod client {
     fn upload(transmitter: &mut FileTransmitter, args: Vec<&str>, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
         if args.len() == 1 {
             let upload_packet = net::create_upload(args[0], 0x1);
-            stream.write(&upload_packet);
+            stream.write(&upload_packet).expect("Unable to write to stream");
             transmitter.host_file(args[0], stream);
             Ok(()) 
         }
@@ -604,11 +591,11 @@ fn main() {
                     .author("Jackson Codispoti <jackson.codispoti@uky.edu>"))
         .get_matches();
 
-    if let Some(ref matches) = matches.subcommand_matches("server") {
+    if let Some(ref _matches) = matches.subcommand_matches("server") {
         server::start_server();
         println!("Running the server");
     }
-    else if let Some(ref matchef) = matches.subcommand_matches("client") {
+    else if let Some(ref _matchef) = matches.subcommand_matches("client") {
         client::start_client();
         println!("Running the client");
     }
