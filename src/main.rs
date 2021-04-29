@@ -324,6 +324,7 @@ mod encoding {
                     print!("{}", s);
                 }
                 else if command == (net::Code::End as u8) {
+                    stream.read(&mut buf).unwrap();
                     break;
                 }
             }
@@ -803,7 +804,9 @@ fn main() {
                          .takes_value(false)
                          .about("List files on server"))
 
-                    .arg(Arg::new("s")
+                    .arg(Arg::new("shell")
+                         .long("shell")
+                         .short('s')
                          .takes_value(false)
                          .about("Forces to start in shell mode. Undefined behaviours"))
                     .about("Launch a client")
