@@ -66,7 +66,7 @@ mod net {
         let b1 = packet[1] as u16;
         let b2 = packet[2] as u16;
         let id = (b2 << 8) | b1;
-        
+
         let mut name = String::new();
         for i in 3..PACKET_SIZE {
             if packet[i] != 0 {
@@ -172,7 +172,9 @@ mod net {
         Redirect=0x6,
         Okay=0x7,
         Error=0x8,
-        Data=0x9
+        Data=0x9,
+        Stdout=0xa,
+        End=0xb
     }
 
     impl Code {
@@ -188,6 +190,8 @@ mod net {
                 0x7 => Code::Okay,
                 0x8 => Code::Error,
                 0x9 => Code::Data,
+                0xa => Code::Stdout,
+                0xb => Code::End,
                 _ => Code::Unknown
             }
         }
@@ -225,6 +229,7 @@ mod net {
 mod encoding {
     use std::net::{TcpStream};
     use std::fs::File;
+    use std::path::Path;
     use std::io::{Read, Write};
     use crate::net;
 
@@ -270,6 +275,24 @@ mod encoding {
                 }
             }
             println!("Received file");
+        }
+
+        pub fn listen(&mut self, stream: &mut TcpStream) {
+            let mut buf = [0; net::PACKET_SIZE];
+
+            loop {
+                stream.peek(&mut buf).expect("Unable to peek stream");
+                let command = net::parse_packet(&buf) as u8;
+
+                if command == (net::Code::Stdout as u8) {
+                    let bytes = stream.read(&mut buf).unwrap();
+                    let s = String::from_utf8_lossy(&buf[1..]);
+                    print!("{}", s);
+                }
+                else if command == (net::Code::End as u8) {
+                    break;
+                }
+            }
         }
 
         pub fn delete_file(&self, _file_name: String) {
@@ -318,8 +341,51 @@ mod encoding {
             0
         }
 
-        pub fn dir(&self, _file_name: String) {
+        pub fn dir(&self, path: &str, stream: &mut TcpStream) {
+            let mut packet = [0; net::PACKET_SIZE];
+            packet[0] = net::Code::Stdout as u8;
+            let mut offset = 1;
 
+            let path = Path::new(path);
+            for entry in path.read_dir().expect("Reading directory failed") {
+                match entry.expect("Failed to get entry").path().to_str() {
+                    Some(path) => {
+                        let path  = String::from(path) + "\n";
+                        if offset + path.len() >= net::PACKET_SIZE {
+                            let fit = path.len() + offset - net::PACKET_SIZE;
+
+                            for b in path.as_bytes().iter().take(fit) {
+                                packet[offset] = *b;
+                                offset += 1;
+                            }
+
+                            stream.write(&packet).expect("Network error");
+
+                            offset = 1;
+                            for b in path.as_bytes().iter().skip(fit) {
+                                packet[offset] = *b;
+                                offset += 1;
+                            }
+                        }
+                        else {
+                            path.len();
+                            for b in path.as_bytes().iter() {
+                                packet[offset] = *b;
+                                offset += 1
+                            }
+                        }
+                    },
+                    None => {}
+                }
+            }
+            if offset != 1 {
+                for b in packet.iter_mut().skip(offset) {
+                    *b = 0;
+                }
+            }
+            stream.write(&packet).expect("Network error");
+            packet[0] = net::Code::End as u8;
+            stream.write(&packet).expect("Network error");
         }
     }
 }
@@ -372,7 +438,7 @@ mod server {
                 },
                 Code::Dir => {
                     let arg = net::parse_dir(packet);
-                    let _res = transmitter.dir(arg);
+                    let _res = transmitter.dir("./", &mut self.stream);
                     net::create_okay()
                 },
                 Code::Redirect => {
@@ -414,7 +480,6 @@ mod server {
                 };
             }
         }
-
     }
 
     pub fn start_server(_matches: &clap::ArgMatches) {
@@ -424,8 +489,8 @@ mod server {
 
         listener.connection_loop();
     }
-
 }
+
 mod client {
     use std::io::{self, Write};
     use std::net::{TcpStream};
@@ -446,7 +511,7 @@ mod client {
             let port: u16 = args[1].parse().unwrap();
 
             *connection = net::Connection::new(ip, port);
-            
+
             Ok(()) 
         }
         else {
@@ -455,9 +520,9 @@ mod client {
     }
 
     fn upload(transmitter: &mut FileTransmitter, stream: &mut TcpStream, path: &str) {
-            let upload_packet = net::create_upload(path, 0x1);
-            stream.write(&upload_packet).expect("Unable to write to stream");
-            transmitter.host_file(path, stream);
+        let upload_packet = net::create_upload(path, 0x1);
+        stream.write(&upload_packet).expect("Unable to write to stream");
+        transmitter.host_file(path, stream);
     }
     fn shell_upload(transmitter: &mut FileTransmitter, args: Vec<&str>, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
         if args.len() == 1 {
@@ -470,10 +535,10 @@ mod client {
     }
 
     fn download(receiver: &mut FileReceiver, stream: &mut TcpStream, path: &str) {
-            receiver.get_file("NOFILE.txt", 0, stream);
-            //let upload_packet = net::create_upload(path, 0x1);
-            //stream.write(&upload_packet).expect("Unable to write to stream");
-            //transmitter.host_file(path, stream);
+        receiver.get_file("NOFILE.txt", 0, stream);
+        //let upload_packet = net::create_upload(path, 0x1);
+        //stream.write(&upload_packet).expect("Unable to write to stream");
+        //transmitter.host_file(path, stream);
     }
     fn shell_download(receiver: &mut FileReceiver, args: Vec<&str>, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
         if args.len() == 1 {
@@ -496,13 +561,14 @@ mod client {
         }
     }
 
-    fn dir(stream: &mut TcpStream) {
-            let dir_packet = net::create_dir("");
-            stream.write(&dir_packet).expect("Network error");
+    fn dir(receiver: &mut FileReceiver, stream: &mut TcpStream) {
+        let dir_packet = net::create_dir("");
+        stream.write(&dir_packet).expect("Network error");
+        receiver.listen(stream);
     }
-    fn shell_dir(args: Vec<&str>, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
+    fn shell_dir(args: Vec<&str>, receiver: &mut FileReceiver, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
         if args.len() == 0 {
-            dir(stream);
+            dir(receiver, stream);
             Ok(()) 
         }
         else {
@@ -522,7 +588,7 @@ mod client {
             "upload" => { shell_upload(transmitter, args, stream) },
             "download" => { shell_download(receiver, args, stream) },
             "delete" => { shell_delete(args, stream) },
-            "dir" => { shell_dir(args, stream) }
+            "dir" => { shell_dir(args, receiver, stream) }
             _ => { println!("Connected, Invalid command"); Ok(()) }
         }
     }
@@ -547,28 +613,28 @@ mod client {
     }
 
     fn open_connection(ip_str: &str, port: u16) -> net::Connection {
-            let ip: std::net::IpAddr = ip_str.parse().unwrap();
+        let ip: std::net::IpAddr = ip_str.parse().unwrap();
 
-            net::Connection::new(ip, port)
+        net::Connection::new(ip, port)
     }
 
     fn pre_connection_shell() -> net::Connection {
-            let mut connection = net::Connection::default();
-            while !connection.connected() {
-                client_prompt("not-connected");
-                let mut line = String::new();
-                io::stdin()
-                    .read_line(&mut line)
-                    .expect("Failed to read line");
+        let mut connection = net::Connection::default();
+        while !connection.connected() {
+            client_prompt("not-connected");
+            let mut line = String::new();
+            io::stdin()
+                .read_line(&mut line)
+                .expect("Failed to read line");
 
-                let (command, args) = parse_command(&line);
-                match pre_run_command(&mut connection, &command, args) {
-                    Ok(()) => {},
-                    Err(e)  => { colour::red_ln!("{:?}", e)}
-                }
+            let (command, args) = parse_command(&line);
+            match pre_run_command(&mut connection, &command, args) {
+                Ok(()) => {},
+                Err(e)  => { colour::red_ln!("{:?}", e)}
             }
+        }
 
-            connection
+        connection
     }
     fn post_connection_shell(stream: TcpStream, transmitter: FileTransmitter, receiver: FileReceiver) {
         let mut stream  = stream;
@@ -606,7 +672,7 @@ mod client {
         let mut stream = connection.stream.expect("This should never happen");
 
         if matches.is_present("list") {
-            dir(&mut stream); 
+            dir(&mut receiver, &mut stream); 
         }
 
         if matches.is_present("download") {
@@ -667,7 +733,7 @@ fn main() {
                     .about("Launch a client")
                     .version("0.0.1")
                     .author("Jackson Codispoti <jackson.codispoti@uky.edu>"))
-        .get_matches();
+                    .get_matches();
 
     if let Some(server_matches) = matches.subcommand_matches("server") {
         server::start_server(server_matches);
