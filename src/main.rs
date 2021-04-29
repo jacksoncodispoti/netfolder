@@ -35,11 +35,18 @@ mod net {
     pub const PACKET_SIZE: usize = 512;
     pub const DATA_OFFSET: usize = 19;
 
-    pub fn create_redirect(port: u16) -> [u8; PACKET_SIZE] {
+    pub fn create_redirect(filename: &str, port: u16) -> [u8; PACKET_SIZE] {
         let mut packet = [0; PACKET_SIZE];
         packet[0] = Code::Redirect as u8;
         packet[1] = port as u8;
         packet[2] = (port >> 8) as u8;
+
+        let mut offset = 3;
+        for c in filename.as_bytes().iter() {
+            packet[offset] = *c;
+            offset += 1;
+        }
+
         packet
     }
 
@@ -62,6 +69,21 @@ mod net {
         packet
     }
 
+    pub fn create_download(file_name: &str) -> [u8; PACKET_SIZE] {
+        let mut packet = [0; PACKET_SIZE];
+        packet[0] = Code::Download as u8;
+
+        let mut offset = 1;
+        for c in file_name.as_bytes().iter() {
+            packet[offset] = *c;
+            offset += 1;
+        }
+
+        packet
+    }
+
+    
+
     pub fn parse_upload(packet: &[u8; PACKET_SIZE]) -> (String, u16) {
         let b1 = packet[1] as u16;
         let b2 = packet[2] as u16;
@@ -79,6 +101,11 @@ mod net {
 
         (name, id)
     }
+
+    pub fn parse_download(packet: &[u8; PACKET_SIZE]) -> String {
+        String::from(String::from_utf8_lossy(&packet[1..]).into_owned().trim().trim_matches(char::from(0)))
+    }
+
 
     pub fn create_error() -> [u8; PACKET_SIZE] {
         let mut packet = [0; PACKET_SIZE];
@@ -150,7 +177,9 @@ mod net {
         let b1 = packet[1] as u16;
         let b2 = packet[2] as u16;
 
-        ((b2 << 8) | b1, String::from("main.rs"))
+        let file = String::from(String::from_utf8_lossy(&packet[2..]).into_owned().trim().trim_matches(char::from(0)));
+
+        ((b2 << 8) | b1, file)
     }
 
     pub fn parse_delete(packet: [u8; PACKET_SIZE]) -> String {
@@ -284,7 +313,12 @@ mod encoding {
                 stream.peek(&mut buf).expect("Unable to peek stream");
                 let command = net::parse_packet(&buf) as u8;
 
-                if command == (net::Code::Stdout as u8) {
+                if command == (net::Code::Redirect as u8) {
+                    stream.read(&mut buf).unwrap();
+                    let (port, filename) = net::parse_redirect(buf);
+                    self.get_file(&filename, port, stream);
+                }
+                else if command == (net::Code::Stdout as u8) {
                     stream.read(&mut buf).unwrap();
                     let s = String::from_utf8_lossy(&buf[1..]);
                     print!("{}", s);
@@ -409,7 +443,7 @@ mod encoding {
 }
 mod server {
     use std::net::{TcpListener, TcpStream, IpAddr, SocketAddr, Ipv4Addr};
-    use std::io::Read;
+    use std::io::{Read, Write};
     use crate::encoding::{FileReceiver, FileTransmitter};
     use crate::net::{self, Code};
 
@@ -465,8 +499,10 @@ mod server {
                     net::create_okay()
                 },
                 Code::Download => {
-                    let port = transmitter.host_file("NOFILE", &mut self.stream);
-                    net::create_redirect(port)
+                    let path = net::parse_download(&packet);
+                    self.stream.write(&net::create_redirect(&path, 0)).expect("Network error");
+                    transmitter.host_file(&path, &mut self.stream);
+                    net::create_okay()
                 },
                 _ => { println!("Unknown command!"); net::create_error() }
             }
@@ -552,10 +588,11 @@ mod client {
         }
     }
 
-    fn download(receiver: &mut FileReceiver, stream: &mut TcpStream, _path: &str) {
-        receiver.get_file("NOFILE.txt", 0, stream);
-        //let upload_packet = net::create_upload(path, 0x1);
-        //stream.write(&upload_packet).expect("Unable to write to stream");
+    fn download(receiver: &mut FileReceiver, stream: &mut TcpStream, path: &str) {
+        let download_packet = net::create_download(path);
+        stream.write(&download_packet).expect("Unable to write to stream");
+        receiver.listen(stream);
+        //receiver.get_file(path, 0, stream);
         //transmitter.host_file(path, stream);
     }
     fn shell_download(receiver: &mut FileReceiver, args: Vec<&str>, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
