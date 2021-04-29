@@ -303,6 +303,71 @@ mod stats {
             self.bytes = bytes;
         }
     }
+
+    #[derive(Debug)]
+    pub struct RealtimeStats {
+        instant: Instant,
+        current_bytes: usize,
+        size: usize,
+        measures: Vec<(u64, usize)>
+    }
+
+    impl RealtimeStats {
+        pub fn new() -> RealtimeStats {
+            RealtimeStats { instant: Instant::now(), current_bytes: 0, size: 0, measures: vec![(0, 0)] }
+        }
+
+        pub fn set_size(&mut self, size: usize) {
+            if self.size == 0 {
+                self.size = size
+            }
+        }
+        pub fn add_bytes(&mut self, bytes: usize) {
+            self.measures.push((self.instant.elapsed().as_nanos() as u64, self.current_bytes));
+            self.current_bytes += bytes;
+        }
+
+        // Return speed in bits
+        pub fn get_speed(&mut self) -> (usize, u64) {
+            // Look at past second
+            const SECOND: u64 = 1000000000;
+
+            let (last_time, last_bytes) = match self.measures.last() {
+               Some((last_time, last_bytes)) => (*last_time, *last_bytes),
+               None => (0, 0)
+            }; 
+
+            if (last_time, last_bytes) != (0, 0) {
+                let threshold = if last_time > SECOND { last_time - SECOND } else { 0 };
+
+                let mut c = 0;
+                for m in self.measures.iter() {
+                    if m.0 < threshold {
+                        c += 1;
+                    }
+                    else {
+                        break;
+                    }
+                }
+
+                for i in 0..c {
+                    self.measures.remove(0);
+                }
+
+                if let Some((start_time, start_bytes)) = self.measures.first() {
+                    (last_bytes - start_bytes, last_time - start_time)
+                }
+                else {
+                   (self.current_bytes - last_bytes, SECOND)
+                }
+
+            }
+            else {
+                println!("nope");
+               (0, SECOND)
+            }
+        }
+    }
 }
 mod encoding {
     use std::net::{TcpStream};
@@ -311,6 +376,7 @@ mod encoding {
     use std::io::{Read, Write};
     use crate::net;
     use crate::stats;
+    use indicatif::{ProgressBar, ProgressStyle};
 
     //Reads from TcpStream, writes to File
     pub struct FileReceiver {
@@ -327,7 +393,8 @@ mod encoding {
             let mut file = File::create(file_name).expect("File error");
 
             let mut stats = stats::TransferStats::new();
-            let mut current_bytes =0;
+            let mut realtime_stats = stats::RealtimeStats::new();
+            let mut current_bytes = 0;
             loop {
                 let _bytes = stream.peek(&mut buf);
                 let command = net::parse_packet(&buf) as u8;
@@ -336,11 +403,13 @@ mod encoding {
                     //println!("\t{}/{}", current_bytes, 000000);
                     let bytes = stream.read(&mut buf).unwrap();
                     let (_id, _trans, size) = net::parse_data(buf);
+                    realtime_stats.set_size(size);
 
                     if current_bytes + bytes >= size {
                         let rem = size - current_bytes;
                         //println!("Current size is {} vs {} {:?} left", current_bytes, size, rem);
                         file.write_all(&buf[net::DATA_OFFSET..(net::DATA_OFFSET + rem)]).expect("Failed to write to stream");
+                        realtime_stats.add_bytes(rem);
                         current_bytes += rem;
                         break;
                     }
@@ -415,6 +484,21 @@ mod encoding {
     pub struct FileTransmitter {
     }
 
+    fn get_rate<'a>(bits: usize) -> (f32, &'a str) {
+            if bits > 1000000000 {
+                (bits as f32 / 1000000000.0, "Gb")
+            }
+            else if bits > 1000000 {
+                (bits as f32 / 1000000.0, "Mb")
+            }
+            else if bits > 1000 {
+                (bits as f32 / 1000.0, "Kb")
+            }
+            else {
+                (bits as f32, "b")
+            }
+    }
+
     impl FileTransmitter {
         pub fn new() -> FileTransmitter {
             FileTransmitter {}
@@ -432,11 +516,28 @@ mod encoding {
             let mut packet = [0; net::PACKET_SIZE];
             packet[0] = net::Code::Data as u8;
             stream.set_write_timeout(Some(std::time::Duration::new(1, 0))).expect("Unable to set write timeout");
+            let progress = ProgressBar::new(size);
+            progress.set_style(ProgressStyle::default_spinner()
+                .template(" {bytes}/{total_bytes} {wide_msg:.green}")
+                .progress_chars("#>-"));
 
             let mut stats = stats::TransferStats::new();
+            let mut realtime_stats = stats::RealtimeStats::new();
             let mut current_bytes: u64 = 0;
+            let mut current_packet = 0;
             loop {
+                current_packet += 1;
+                if (current_packet % 200) == 1 {
+                            let (bytes, time) = realtime_stats.get_speed();
+                            let bits = bytes * 8;
+                            let (bits, rate) = get_rate(bits);
+
+                            progress.set_message(&format!("[Transfer Rate: {} {}]", bits, rate));
+                            progress.inc(1);
+                            progress.set_position(current_bytes);
+                }
                 let bytes = file.read(&mut packet[net::DATA_OFFSET..]);
+                realtime_stats.set_size(size as usize);
 
                 match bytes {
                     Ok(bytes) => {
@@ -445,6 +546,7 @@ mod encoding {
                             net::mod_data(&mut packet, 0x01, current_bytes, size);
                             stream.write_all(&packet).expect("Network error");
                             current_bytes += bytes as u64;
+                            realtime_stats.add_bytes(bytes);
                         }
                         else {
                             break;
