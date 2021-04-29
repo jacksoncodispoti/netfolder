@@ -454,21 +454,14 @@ mod client {
         }
     }
 
-    fn upload(transmitter: &mut FileTransmitter, args: Vec<&str>, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
-        if args.len() == 1 {
-            let upload_packet = net::create_upload(args[0], 0x1);
+    fn upload(transmitter: &mut FileTransmitter, stream: &mut TcpStream, path: &str) {
+            let upload_packet = net::create_upload(path, 0x1);
             stream.write(&upload_packet).expect("Unable to write to stream");
-            transmitter.host_file(args[0], stream);
-            Ok(()) 
-        }
-        else {
-            Err(Box::new(error::ArgError::new("Expected 1 argument")))
-        }
+            transmitter.host_file(path, stream);
     }
-
-    fn download(receiver: &mut FileReceiver, args: Vec<&str>, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
+    fn shell_upload(transmitter: &mut FileTransmitter, args: Vec<&str>, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
         if args.len() == 1 {
-            receiver.get_file("NOFILE.txt", 0, stream);
+            upload(transmitter, stream, args[0]);
             Ok(()) 
         }
         else {
@@ -476,7 +469,23 @@ mod client {
         }
     }
 
-    fn delete(args: Vec<&str>, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
+    fn download(receiver: &mut FileReceiver, stream: &mut TcpStream, path: &str) {
+            receiver.get_file("NOFILE.txt", 0, stream);
+            //let upload_packet = net::create_upload(path, 0x1);
+            //stream.write(&upload_packet).expect("Unable to write to stream");
+            //transmitter.host_file(path, stream);
+    }
+    fn shell_download(receiver: &mut FileReceiver, args: Vec<&str>, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
+        if args.len() == 1 {
+            download(receiver, stream, args[0]);
+            Ok(()) 
+        }
+        else {
+            Err(Box::new(error::ArgError::new("Expected 1 argument")))
+        }
+    }
+
+    fn shell_delete(args: Vec<&str>, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
         if args.len() == 1 {
             let delete_packet = net::create_delete(args[0]);
             stream.write(&delete_packet).expect("Network error");
@@ -487,10 +496,13 @@ mod client {
         }
     }
 
-    fn dir(args: Vec<&str>, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
-        if args.len() == 0 {
+    fn dir(stream: &mut TcpStream) {
             let dir_packet = net::create_dir("");
             stream.write(&dir_packet).expect("Network error");
+    }
+    fn shell_dir(args: Vec<&str>, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
+        if args.len() == 0 {
+            dir(stream);
             Ok(()) 
         }
         else {
@@ -507,10 +519,10 @@ mod client {
 
     fn run_command(transmitter: &mut FileTransmitter, receiver: &mut FileReceiver, stream: &mut TcpStream, command: &str, args: Vec<&str>) -> Result<(), Box<dyn Error>> {
         match command {
-            "upload" => { upload(transmitter, args, stream) },
-            "download" => { download(receiver, args, stream) },
-            "delete" => { delete(args, stream) },
-            "dir" => { dir(args, stream) }
+            "upload" => { shell_upload(transmitter, args, stream) },
+            "download" => { shell_download(receiver, args, stream) },
+            "delete" => { shell_delete(args, stream) },
+            "dir" => { shell_dir(args, stream) }
             _ => { println!("Connected, Invalid command"); Ok(()) }
         }
     }
@@ -558,13 +570,12 @@ mod client {
 
             connection
     }
-    fn post_connection_shell(connection: net::Connection) {
-        let mut transmitter = FileTransmitter::new();
-        let mut receiver = FileReceiver::new();
+    fn post_connection_shell(stream: TcpStream, transmitter: FileTransmitter, receiver: FileReceiver) {
+        let mut stream  = stream;
+        let mut transmitter = transmitter;
+        let mut receiver = receiver;
 
         loop {
-            let mut stream = connection.stream.expect("This should never happen");
-
             loop {
                 client_prompt("Connected");
                 let mut line = String::new();
@@ -590,8 +601,26 @@ mod client {
         else {
             pre_connection_shell()
         };
+        let mut transmitter = FileTransmitter::new();
+        let mut receiver = FileReceiver::new();
+        let mut stream = connection.stream.expect("This should never happen");
 
-        post_connection_shell(connection);
+        if matches.is_present("list") {
+            dir(&mut stream); 
+        }
+
+        if matches.is_present("download") {
+            let path = matches.value_of("download").unwrap();
+            download(&mut receiver, &mut stream, path); 
+        }
+
+        if matches.is_present("upload") {
+            let path = matches.value_of("upload").unwrap();
+            upload(&mut transmitter, &mut stream, path); 
+        }
+
+
+        post_connection_shell(stream, transmitter, receiver);
     }
 }
 
@@ -615,6 +644,23 @@ fn main() {
                          .short('p')
                          .takes_value(true)
                          .about("The port to connect to"))
+
+                    .arg(Arg::new("upload")
+                         .long("upload")
+                         .short('u')
+                         .takes_value(true)
+                         .about("The file to upload"))
+                    .arg(Arg::new("download")
+                         .long("download")
+                         .short('d')
+                         .takes_value(true)
+                         .about("The file to download"))
+                    .arg(Arg::new("list")
+                         .long("list")
+                         .short('l')
+                         .takes_value(false)
+                         .about("List files on server"))
+
                     .arg(Arg::new("s")
                          .takes_value(false)
                          .about("Forces to start in shell mode. Undefined behaviours"))
