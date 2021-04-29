@@ -317,6 +317,7 @@ mod encoding {
                     stream.read(&mut buf).unwrap();
                     let (port, filename) = net::parse_redirect(buf);
                     self.get_file(&filename, port, stream);
+                    break;
                 }
                 else if command == (net::Code::Stdout as u8) {
                     stream.read(&mut buf).unwrap();
@@ -334,7 +335,11 @@ mod encoding {
         pub fn delete_file(&self, stream: &mut TcpStream, path: &str) {
             let path = Path::new(path);
             match std::fs::remove_file(path) {
-                Ok(_result) => {},
+                Ok(_result) => {
+                    let mut packet = [0; net::PACKET_SIZE];
+                    packet[0] = net::Code::End as u8;
+                    stream.write(&packet).expect("Unable to write to stream");
+                },
                 Err(_os) => {
                     let mut packet = [0; net::PACKET_SIZE];
                     packet[0] = net::Code::Stdout as u8;
@@ -593,8 +598,6 @@ mod client {
         let download_packet = net::create_download(path);
         stream.write(&download_packet).expect("Unable to write to stream");
         receiver.listen(stream);
-        //receiver.get_file(path, 0, stream);
-        //transmitter.host_file(path, stream);
     }
     fn shell_download(receiver: &mut FileReceiver, args: Vec<&str>, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
         if args.len() == 1 {
