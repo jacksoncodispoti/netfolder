@@ -188,6 +188,7 @@ mod net {
     }
 
     #[derive(Debug)]
+    #[derive(PartialEq, Eq)]
     pub enum Code {
         Unknown=0x0,
         Upload=0x1,
@@ -200,7 +201,8 @@ mod net {
         Error=0x8,
         Data=0x9,
         Stdout=0xa,
-        End=0xb
+        End=0xb,
+        Disconnect=0xc
     }
 
     impl Code {
@@ -218,6 +220,7 @@ mod net {
                 0x9 => Code::Data,
                 0xa => Code::Stdout,
                 0xb => Code::End,
+                0xc => Code::Disconnect,
                 _ => Code::Unknown
             }
         }
@@ -322,7 +325,6 @@ mod encoding {
         pub fn get_file(&mut self, file_name: &str, _port: u16, stream: &mut TcpStream) -> stats::TransferStats {
             let mut buf = [0; net::PACKET_SIZE];
             let mut file = File::create(file_name).expect("File error");
-            println!("Writing to {}", file_name);
 
             let mut stats = stats::TransferStats::new();
             let mut current_bytes =0;
@@ -348,12 +350,11 @@ mod encoding {
                     current_bytes += bytes - net::DATA_OFFSET;
                 }
                 else {
-                    println!("Exiting with command {}", command);
+                    //println!("Exiting with command {}", command);
                     break;
                 }
             }
             stats.stop(current_bytes);
-            println!("Received file");
             stats
         }
 
@@ -506,6 +507,7 @@ mod server {
     use std::io::{Read, Write};
     use crate::encoding::{FileReceiver, FileTransmitter};
     use crate::net::{self, Code};
+    use std::thread;
 
     struct Connection {
         stream: TcpStream,
@@ -518,30 +520,38 @@ mod server {
         }
 
         fn handle(&mut self) {
+            let addr = self.stream.local_addr().unwrap();
             let mut transmitter = FileTransmitter::new();
             let mut receiver = FileReceiver::new();
 
             let mut buf = [0; net::PACKET_SIZE ];
+            println!("[{}] Connection initiated", addr);
             loop {
                 match self.stream.read(&mut buf) {
                     Ok(size) => {
                         if size != 0 {
                             let code = net::parse_packet(&buf);
-                            self.handle_command(&mut transmitter, &mut receiver, code, buf);
+
+                            if code == net::Code::Disconnect {
+                                break;
+                            }
+                            self.handle_command(&mut transmitter, &mut receiver, code, buf, &addr);
                         }
                     },
                     Err(_e) => {}
                 }
             }
+            println!("[{}] Connection ended", addr);
         }
 
-        fn handle_command(&mut self, transmitter: &mut FileTransmitter, receiver: &mut FileReceiver, command: Code, packet: [u8; net::PACKET_SIZE]) -> [u8; net::PACKET_SIZE] {
-            println!("\tGot code {:?}", command);
+        fn handle_command(&mut self, transmitter: &mut FileTransmitter, receiver: &mut FileReceiver, command: Code, packet: [u8; net::PACKET_SIZE], addr: &std::net::SocketAddr) -> [u8; net::PACKET_SIZE] {
+            //println!("[{}] Received code {:?}", addr, command);
             match command {
                 Code::Upload => {
                     let (name, id) = net::parse_upload(&packet);
+                    println!("[{}] Receiving upload: {}", addr, name);
                     let stats = receiver.get_file(&name, id, &mut self.stream);
-                    println!("{}", stats);
+                    println!("[{}]\t{}: {}", addr, name, stats);
                     net::create_okay()
                 },
                 Code::Delete => {
@@ -557,7 +567,7 @@ mod server {
                 Code::Redirect => {
                     let (port, filename) = net::parse_redirect(packet);
                     let stats = receiver.get_file(&filename, port, &mut self.stream);
-                    println!("{}", stats);
+                    println!("[{}] {}", addr, stats);
                     net::create_okay()
                 },
                 Code::Download => {
@@ -566,7 +576,7 @@ mod server {
                     let _stats = transmitter.host_file(&path, &mut self.stream);
                     net::create_okay()
                 },
-                _ => { println!("Unknown command!"); net::create_error() }
+                _ => { println!("[{}] Unknown command!", addr); net::create_error() }
             }
         }
     }
@@ -586,9 +596,9 @@ mod server {
             for stream in self.listener.incoming() {
                 match stream {
                     Ok(stream) => {
-                        println!("Accepted connection from {}", stream.local_addr().unwrap());
                         let mut connection = Connection::new(stream);
-                        connection.handle();
+                        //connection.handle();
+                        thread::spawn(move || { connection.handle() });
                     }
                     Err(e) => {
                         println!("Error accepting incoming connection: {}", e);
@@ -739,6 +749,12 @@ mod client {
         net::Connection::new(ip, port)
     }
 
+    fn disconnect(stream: &mut TcpStream, _transmitter: &mut FileTransmitter, _receiver: &mut FileReceiver) {
+        let mut packet = [0; net::PACKET_SIZE];
+        packet[0] = net::Code::Disconnect as u8;
+        stream.write_all(&packet).expect("Network error");
+    }
+
     fn pre_connection_shell() -> net::Connection {
         let mut connection = net::Connection::default();
         while !connection.connected() {
@@ -763,20 +779,22 @@ mod client {
         let mut receiver = receiver;
 
         loop {
-            loop {
-                client_prompt("Connected");
-                let mut line = String::new();
-                io::stdin()
-                    .read_line(&mut line)
-                    .expect("Failed to read line");
+            client_prompt("Connected");
+            let mut line = String::new();
+            io::stdin()
+                .read_line(&mut line)
+                .expect("Failed to read line");
 
-                let (command, args) = parse_command(&line);
-                match run_command(&mut transmitter, &mut receiver, &mut stream, &command, args) {
-                    Ok(()) => {},
-                    Err(e)  => { colour::red_ln!("{:?}", e)}
-                }
+            let (command, args) = parse_command(&line);
+            if command == "exit" {
+                break;
+            }
+            match run_command(&mut transmitter, &mut receiver, &mut stream, &command, args) {
+                Ok(()) => {},
+                Err(e)  => { colour::red_ln!("{:?}", e)}
             }
         }
+        disconnect(&mut stream, &mut transmitter, &mut receiver);
     }
 
     pub fn start_client(matches: &clap::ArgMatches) {
@@ -820,7 +838,16 @@ mod client {
         if matches.is_present("shell") || !had_cmd {
             post_connection_shell(stream, transmitter, receiver);
         }
+        else {
+            disconnect(&mut stream, &mut transmitter, &mut receiver);
+        }
     }
+}
+
+macro_rules! arg {
+    ($t:expr) => {
+        Arg::new($t).long($t);
+    };
 }
 
 fn main() {
@@ -833,34 +860,28 @@ fn main() {
                     .version("0.0.1")
                     .author("Jackson Codispoti <jackson.codispoti@uky.edu>"))
         .subcommand(App::new("client")
-                    .arg(Arg::new("host")
+                    .arg(arg!("host")
                          .short('n')
-                         .long("host")
                          .takes_value(true)
                          .about("The hostname to connect to"))
-                    .arg(Arg::new("port")
-                         .long("port")
+                    .arg(arg!("port")
                          .short('p')
                          .takes_value(true)
                          .about("The port to connect to"))
 
-                    .arg(Arg::new("upload")
-                         .long("upload")
+                    .arg(arg!("upload")
                          .short('u')
                          .takes_value(true)
                          .about("The file to upload"))
-                    .arg(Arg::new("download")
-                         .long("download")
+                    .arg(arg!("download")
                          .short('d')
                          .takes_value(true)
                          .about("The file to download"))
-                    .arg(Arg::new("delete")
-                         .long("delete")
+                    .arg(arg!("delete")
                          .short('D')
                          .takes_value(true)
                          .about("The file to delete"))
-                    .arg(Arg::new("list")
-                         .long("list")
+                    .arg(arg!("list")
                          .short('l')
                          .takes_value(false)
                          .about("List files on server"))
