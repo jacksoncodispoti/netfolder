@@ -46,31 +46,31 @@ impl Connection {
                 println!("[{}] Receiving upload: {}", addr, name);
                 let stats = receiver.get_file(&name, id, &mut self.stream);
                 println!("[{}]\t{}: {}", addr, name, stats);
-                net::create_okay()
+                net::Code::Okay.packet()
             },
             Code::Delete => {
                 let arg = net::parse_delete(packet);
                 let _res = receiver.delete_file(&mut self.stream, &arg);
-                net::create_okay()
+                net::Code::Okay.packet()
             },
             Code::Dir => {
                 let _arg = net::parse_dir(packet);
                 let _res = transmitter.dir("./", &mut self.stream);
-                net::create_okay()
+                net::Code::Okay.packet()
             },
             Code::Redirect => {
                 let (port, filename) = net::parse_redirect(packet);
                 let stats = receiver.get_file(&filename, port, &mut self.stream);
                 println!("[{}] {}", addr, stats);
-                net::create_okay()
+                net::Code::Okay.packet()
             },
             Code::Download => {
                 let path = net::parse_download(&packet);
                 self.stream.write_all(&net::create_redirect(&path, 0)).expect("Network error");
                 let _stats = transmitter.host_file(&path, &mut self.stream);
-                net::create_okay()
+                net::Code::Okay.packet()
             },
-            _ => { println!("[{}] Unknown command!", addr); net::create_error() }
+            _ => { println!("[{}] Unknown command!", addr); net::Code::Error.packet() }
         }
     }
 }

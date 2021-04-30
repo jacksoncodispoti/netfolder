@@ -8,33 +8,6 @@ use std::mem;
 pub const PACKET_SIZE: usize = 512;
 pub const DATA_OFFSET: usize = 19;
 
-mod error {
-    use std::error::Error;
-    use std::fmt;
-
-    #[derive(Debug)]
-    pub struct ArgError {
-        details: String
-    }
-
-    impl ArgError {
-        pub fn new(msg: &str) -> ArgError {
-            ArgError{details: msg.to_string()}
-        }
-    }
-
-    impl fmt::Display for ArgError {
-        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-            write!(f, "{}", self.details)
-        }
-    }
-
-    impl Error for ArgError {
-        fn description(&self) -> &str {
-            &self.details
-        }
-    }
-}
 
 #[derive(Debug)]
 #[derive(Copy)]
@@ -97,10 +70,6 @@ pub fn create_redirect(filename: &str, port: u16) -> [u8; PACKET_SIZE] {
     packet
 }
 
-pub fn create_okay() -> [u8; PACKET_SIZE] {
-    Code::Okay.packet()
-}
-
 pub fn create_upload(file_name: &str, id: u16) -> [u8; PACKET_SIZE] {
     let mut packet = Code::Upload.packet();
     packet[1] = id as u8;
@@ -125,8 +94,6 @@ pub fn create_download(file_name: &str) -> [u8; PACKET_SIZE] {
     packet
 }
 
-
-
 pub fn parse_upload(packet: &[u8; PACKET_SIZE]) -> (String, u16) {
     let b1 = packet[1] as u16;
     let b2 = packet[2] as u16;
@@ -147,11 +114,6 @@ pub fn parse_upload(packet: &[u8; PACKET_SIZE]) -> (String, u16) {
 
 pub fn parse_download(packet: &[u8; PACKET_SIZE]) -> String {
     String::from(String::from_utf8_lossy(&packet[1..]).into_owned().trim().trim_matches(char::from(0)))
-}
-
-
-pub fn create_error() -> [u8; PACKET_SIZE] {
-    Code::Error.packet()
 }
 
 pub fn create_delete(file_name: &str) -> [u8; PACKET_SIZE] {
