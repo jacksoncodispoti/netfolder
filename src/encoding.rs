@@ -25,31 +25,35 @@ impl FileReceiver {
         let mut realtime_stats = stats::RealtimeStats::new();
         let mut current_bytes = 0;
         loop {
-            let _bytes = stream.peek(&mut buf);
-            let command = parse::packet(&buf) as u8;
+            let available = stream.peek(&mut buf).expect("Unable to peek stream");
 
-            if command == (net::Code::Data as u8) {
-                //println!("\t{}/{}", current_bytes, 000000);
-                let bytes = stream.read(&mut buf).unwrap();
-                let (_id, _trans, size) = parse::data(buf);
-                realtime_stats.set_size(size);
+            if available == net::PACKET_SIZE {
+                let command = parse::packet(&buf) as u8;
 
-                if current_bytes + bytes >= size {
-                    let rem = size - current_bytes;
-                    //println!("Current size is {} vs {} {:?} left", current_bytes, size, rem);
-                    file.write_all(&buf[net::DATA_OFFSET..(net::DATA_OFFSET + rem)]).expect("Failed to write to stream");
-                    realtime_stats.add_bytes(rem);
-                    current_bytes += rem;
-                    break;
+                if command == (net::Code::Data as u8) {
+                    let bytes = stream.read(&mut buf).expect("Unable to read stream");
+                    let (_id, _trans, size) = parse::data(buf);
+                    realtime_stats.set_size(size);
+
+                    if current_bytes + bytes >= size {
+                        let rem = size - current_bytes;
+                        file.write_all(&buf[net::DATA_OFFSET..(net::DATA_OFFSET + rem)]).expect("Failed to write to stream");
+                        realtime_stats.add_bytes(rem);
+                        current_bytes += rem;
+                        break;
+                    }
+                    else {
+                        file.write_all(&buf[net::DATA_OFFSET..]).expect("Failed to write to stream");
+                    }
+
+                    current_bytes += bytes - net::DATA_OFFSET;
                 }
                 else {
-                    file.write_all(&buf[net::DATA_OFFSET..]).expect("Failed to write to stream");
+                    break;
                 }
-                current_bytes += bytes - net::DATA_OFFSET;
             }
+            // Full packet unavailable, timeout and try again
             else {
-                //println!("Exiting with command {}", command);
-                break;
             }
         }
         stats.stop(current_bytes);
@@ -161,7 +165,8 @@ impl FileTransmitter {
         loop {
             if instant.elapsed().as_secs() != last_second {
                 let bytes = current_bytes - last_bytes;
-                let bits = bytes * 8;
+                let bits = bytes;
+                //let bits = bytes * 8;
                 let (bits, rate) = get_rate(bits as usize);
 
                 progress.set_message(&format!("[Transfer Rate: {} {}]", bits, rate));
