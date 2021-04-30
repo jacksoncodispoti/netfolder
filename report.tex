@@ -16,26 +16,180 @@
 \maketitle %This command prints the title based on information entered above
 
 \section{Introduction}
-\verb|netfolder| is a memory safe, Rust-programmed network folder program for uploading files to and downloading files from a shared network folder. 
-\subsection{Building}
-\subsection{Usage}
+\verb|netfolder| is a memory safe, Rust-programmed network folder program for uploading files to and downloading files from a shared network folder.
 
 \section{Design}
-For modularity purposes, this program is split into the following Rust modules: \verb|net|, \verb|stats|, \verb|encoding|, \verb|server|, and \verb|client|.
-Most packet creation code, and packet parsing code is in the \verb|net| module.
-The \verb|stats| module is used for collecting runtime stats such as upload speed, download speed, and other future metrics.
-The \verb|encoding| module is used for handling the writing, reading, uploading, and downloading functionality of files.
-The \verb|server| module contains the server code for handling requests.
-The \verb|client| module contains the client code for initializing connections, executing command arguments, and for starting the user shell.
-\subsection{net}
-The purpose of this module is to handle a good amount of the networking code such as generating and parsing packets along with storing relevent constant variables.
+\subsection{Major Components}
+To limit duplicate code between the client and server and to increase modularity, netfolder is split into the following main Rust modules: \verb|net|, \verb|net::server|, \verb|net::client|, and \verb|encoding|.
 
-\subsection{stats}
+\subsection{net}
+This module is reponsible for holding packet creation and parsing code along with constants that are shared between the client and the server.
+\begin{figure}
+	\begin{tabular}{|l|l|}
+		\hline
+		Component & Purpose\\\hline
+		\verb|enum Code| & Stores command codes for packet and server\\
+		\verb|mod create| & Contains methods for creating packets for each Code\\
+		\verb|mod parse| & Contains methods for parsing packets for each Code\\
+		\verb|struct Connection| & Stores client connection information/variables\\ \hline
+	\end{tabular}
+	\caption{Description of components in \texttt{net}}
+\end{figure}
+
+\subsection{net::server}
+This module is responsible for the sever operation. It is responsible for starting the server, listening for connections, breadking new connections into their own threads, and handling packets.
+\begin{figure}
+	\begin{tabular}{|l|l|}
+		\hline
+		Component & Purpose\\\hline
+		\verb|struct ConnectionListener| & Handles incoming connections and threading\\
+		\verb|Connection| & Stores server connection info and methods for handling requests\\
+		\verb|Connection.handle| & Connection loop for an open connection\\
+		\verb|Connection.handle_command| & Handles actions for each \verb|net::Code|\\
+		\hline
+	\end{tabular}
+	\caption{Description of components in \texttt{net::server}}
+\end{figure}
+
+\subsection{net::client}
+This module is responsible for the client operation. It is responsbile for starting the connection, handling command line arguments, handling packets from the server, and managing the command shell.
+
+\begin{figure}
+	\begin{tabular}{|l|l|}
+		\hline
+		Component & Purpose\\\hline
+		\verb|mod commands| & Contains shared methods for each \verb|net::Code|\\
+		\verb|mod shell| & Contains validation methods for shell calls to commands\\
+		\verb|shell::post_connection_shell| & Parses input from shell and calls commands\\
+		\hline
+	\end{tabular}
+	\caption{Description of components in \texttt{net::client}}
+\end{figure}
+
 \subsection{encoding}
-\subsection{server}
-\subsection{client}
+This module is responsible for the receiving and transmitting of files. Having a module devoted to this elimited duplicate code in both the server and client portions as the upload/download protocol is symettric. There are two components for this purpose: \verb|FileReceiver| and \verb|FileTransmitter|.
+\begin{figure}
+	\begin{tabular}{|l|l|}
+		\hline
+		Component & Purpose\\\hline
+		\verb|struct FileReceiver| & Handles all file write operations\\
+		\verb|fn FileReceiver.listen| & Waits on stream for a Redirect, End, or Stdout \\
+		\verb|fn FileReceiver.get_file| & Reads entire file from stream and saves it \\
+		\verb|fn FileReceiver.delete_file| & Deletes file\\
+		\verb|struct FileTransmitter| & Handles all file read operations\\
+		\verb|fn FileTransmitter.host_file| & Reads from file to stream\\
+		\verb|fn FileTransmitter.dir| & Lists directories to stream\\
+		\hline
+	\end{tabular}
+	\caption{Description of components in \texttt{encoding}}
+\end{figure}
+
+\subsection{Networking Operation}
+\verb|netfolder| is based on a simple protocol. Each packet is of size $512$ bytes. The first byte is a code which describes the purpose of a packet. These codes can be of $11$ different values and are in a following table. Only $2$ codes are used for data: Data and Stdout. The remaining bytes in the message is for data which is specific to each command.\\
+
+\begin{figure}
+	\centering
+	\begin{tabular}{|l|c|c|l|}
+		\hline
+		Name & Value & Is Data &Purpose\\\hline
+		Upload & 0x1 & f & Indicate upload\\
+		Download & 0x2 & f & Indicate download\\
+		Delete & 0x3 & f & Indicate delete\\
+		Dir & 0x4 & f & Indicate dir\\
+		Redirect & 0x6 & f & Indicate a file being sent\\
+		Okay & 0x7 & f & Indicate success\\
+		Error & 0x8 & f & Indicate an error\\
+		\hline
+		Data & 0x9 & \textbf{t} & Data packet\\
+		Stdout & 0xa & \textbf{t}& Stdout packet\\
+		\hline
+		End & 0xb & f& Indicate end of file transfer\\
+		Disconnect & 0xc & f & Indicate end of connection\\
+		\hline
+	\end{tabular}
+	\label{tbl_code}
+	\caption{Description of each \texttt{net::Code}}
+\end{figure}
+
+\subsubsection{Sending commands}
+The process for sending commands to the server is the following:
+\begin{enumerate}
+	\item Create a base packet with the first byte as a code
+	\item Put command data in remaining bytes (file name for Upload, Download, Delete, none otherwise)
+	\item Send command
+	\item Listen for data reply with \verb|receiver.listen()| for stdout or receiving a file (for download, delete, and dir)
+\end{enumerate}
+
+\subsubsection{Transferring Files}
+The file transfer process is quite similar compared to the command one. File transfer is accomplished through the use of Redirect and Data packets.\\
+The Redirect packet expresses one side's intent to transmit a file and gives information about it to the server including a 16-bit object identifier and the filename (the max size on an ext4 system is $256$ bytes, so $512$ bytes is always a large enough packet size).\\
+The Data packet represents the actual data of a file itself. After the $1$st byte, the next $2$ are used to store the $16$-bit object id. The next $4$ bytes are used for the number of transmitted bytes, then the next $4$ are for the total number of bytes. After these initial bytes, the rest are used soley for raw-file data. The amount of bytes used for non-data purposes is in these packets is $11$ bytes, which means a $\frac{11}{512}=2.15\%$overhead.\\
+This operates as follows:
+\begin{enumerate}
+	\item Client sends Redirect packet
+	\item Server receives redirect, gleans file info, and starts listening
+	\item Client send data packets until file is transferred
+	\item Server stops listening for Data packets and normal operation is resumed
+\end{enumerate}
+
+\subsubsection{Receiving the output of Dir}
+The dir command is easy to execute, however, it involves listening to the stream for the result unlike the other non-data commands, but it also doesn't use the same data mechanism file transfers do. Instead, it has it's own method for receiving output using Stdout and End codes.\\
+Each Stdout code is comprised of only the Stdout code as the first bit, and data as all remaining.\\
+The End code is comprised of only the End code with no data.\\
+This operates as follows:
+\begin{enumerate}
+	\item Client sends Dir packet and starts listening
+	\item Server receives packet and starts transmitting Stdout until done
+	\item After server is done, server sends End packet
+	\item Client stops listening and normal operation is resumed
+\end{enumerate}
 
 \section{Experiments}
+To evaluate the performance of \verb|netfolder|, I ran two experiments. The first was over a loopback adapter and the second was over an ethernet connection. In these experiments, I will use bytes as the default unit as opposed to bits as they mean more sense relative to file transfers. Both experiments involved copying a $5.7$ gigabyte Windows 10 ISO file from the destination to the source using this program.
+
+\subsection{Loopback}
+\subsubsection{Setup}
+This first experiment was ran entirelly on my local machine. The destination and source were both on an NVME solid state drive.
+
+\subsubsection{Results}
+\begin{figure}
+	\centering
+	\includegraphics[width=0.6\linewidth]{results/loopback.eps}
+	\caption{Transfer Speed vs. Time for Loopback Connection}
+\end{figure}
+
+The transfer took a total of $26$ seconds to complete with an average transfer rate of $237.5$MB/s. These experimental results are extremelly high. This can be attributed to several reasons. Firstly, storage medium the files are being copied too and from has an extremelly high IO speed. NVME drives are known for very fast speeds, up to $1000$ MB/s speeds for sequential operations. Additionally, this connection was over a loopback adapter. This adapter has no packet loss and does not need to leave my machine, so it is a very quick and reliable connection.
+
+\subsection{Wired}
+\subsubsection{Setup}
+The second experiment was ran over a wired CAT-5 ethernet connection. The source as my machine from an NVME solid state drive. The destination was a laptop which also contained an NVME drive, however, some things were turned off in the BIOS.
+\subsubsection{Results}
+This transfer took a total of $583$ seconds to complete with an everage transfer rate of $10.67$MB/s. These are still great experimental results, however, they are significantly lower than the loopback ones. 
+
+\begin{figure}
+	\centering
+	\includegraphics[width=0.6\linewidth]{results/wired.eps}
+	\caption{Transfer Speed vs. Time for Wired Connection}
+\end{figure}
+
+\subsection{Wireless}
+\subsubsection{Setup}
+The third experiment was ran over a $5$Ghz wireless connection. The source as my machine from an NVME solid state drive. The destination was a laptop (different than the $2$nd test) which also contained a full-speed NVME drive.
+\subsubsection{Results}
+This transfer took a total of $579$ seconds to complete with an everage transfer rate of $10.73$MB/s. These results are slightly better than the Wired ones, however, they're hardly significant. 
+
+\begin{figure}
+	\centering
+	\includegraphics[width=0.6\linewidth]{results/wireless.eps}
+	\caption{Transfer Speed vs. Time for Wireless Connection}
+\end{figure}
+\begin{figure}
+	\centering
+	\includegraphics[width=0.6\linewidth]{results/compare.png}
+	\caption{Transfer Speed vs. Time for Wired(Blue) and Wireless(Orange) Connections}
+\end{figure}
+
 \section{Conclusions}
+This program is about as fast as it can be. The limiting factor is the write speed of a drive. Rsync and netfolder yield similar results over an ethernet link
 
 \end{document}

@@ -19,6 +19,7 @@ impl FileReceiver {
 
     pub fn get_file(&mut self, file_name: &str, _port: u16, stream: &mut TcpStream) -> stats::TransferStats {
         let mut buf = [0; net::PACKET_SIZE];
+        println!("Creating file {}", file_name);
         let mut file = File::create(file_name).expect("File error");
 
         let mut stats = stats::TransferStats::new();
@@ -117,19 +118,23 @@ impl FileReceiver {
 pub struct FileTransmitter {
 }
 
-fn get_rate<'a>(bits: usize) -> (f32, &'a str) {
-        if bits > 1000000000 {
-            (bits as f32 / 1000000000.0, "Gb")
-        }
-        else if bits > 1000000 {
-            (bits as f32 / 1000000.0, "Mb")
-        }
-        else if bits > 1000 {
-            (bits as f32 / 1000.0, "Kb")
-        }
-        else {
-            (bits as f32, "b")
-        }
+fn get_rate<'a>(bytes: usize) -> (f32, &'a str) {
+    if bytes > 1000000000 {
+        (bytes as f32 / 1000000000.0, "GB")
+    }
+    else if bytes > 1000000 {
+        (bytes as f32 / 1000000.0, "MB")
+    }
+    else if bytes > 1000 {
+        (bytes as f32 / 1000.0, "KB")
+    }
+    else {
+        (bytes as f32, "B")
+    }
+}
+
+fn get_stats_file(name: &str) -> File {
+   File::create(format!("{}.{}", name, "stats")).expect("Failed to open stats file")
 }
 
 impl FileTransmitter {
@@ -145,6 +150,7 @@ impl FileTransmitter {
         let size = file.metadata().expect("File Error").len() as u64;
 
         println!("Hosting file {:?}", &path);
+        println!("Total size: {}", size);
 
         let mut packet = [0; net::PACKET_SIZE];
         packet[0] = net::Code::Data as u8;
@@ -162,14 +168,15 @@ impl FileTransmitter {
         let mut last_second = 0;
         let mut last_bytes = 0;
 
+        let mut stat_file = get_stats_file(path.file_name().unwrap().to_str().unwrap());
         loop {
             if instant.elapsed().as_secs() != last_second {
                 let bytes = current_bytes - last_bytes;
-                let bits = bytes;
-                //let bits = bytes * 8;
-                let (bits, rate) = get_rate(bits as usize);
+                stat_file.write_all(format!("{}\n", bytes).as_bytes()).expect("Unable to write to stats file");
 
-                progress.set_message(&format!("[Transfer Rate: {} {}]", bits, rate));
+                let (bytes, rate) = get_rate(bytes as usize);
+
+                progress.set_message(&format!("[Transfer Rate: {} {}]", bytes, rate));
                 progress.inc(1);
                 progress.set_position(current_bytes);
 
@@ -184,7 +191,12 @@ impl FileTransmitter {
                     if bytes != 0 {
                         //println!("\t{}/{}", current_bytes, size);
                         net::mod_data(&mut packet, 0x01, current_bytes, size);
-                        stream.write_all(&packet).expect("Network error");
+
+                        while let Err(..) = stream.write_all(&packet) {
+                            println!("Timing out...");
+                        }
+
+                        //stream.write_all(&packet).expect("Network error");
                         current_bytes += bytes as u64;
                         realtime_stats.add_bytes(bytes);
                     }
