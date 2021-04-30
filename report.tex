@@ -1,0 +1,41 @@
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage[english]{babel}
+\usepackage[]{amsmath} %lets us use \begin{proof}
+\usepackage[]{amsthm} %lets us use \begin{proof}
+\usepackage[]{amssymb} %gives us the character \varnothing
+\usepackage[]{multirow}
+\usepackage[]{graphicx}
+
+\title{CS371: Project Report}
+\author{Jackson Codispoti}
+\date\today
+%This information doesn't actually show up on your document unless you use the maketitle command below
+
+\begin{document}
+\maketitle %This command prints the title based on information entered above
+
+\section{Introduction}
+\verb|netfolder| is a memory safe, Rust-programmed network folder program for uploading files to and downloading files from a shared network folder. 
+\subsection{Building}
+\subsection{Usage}
+
+\section{Design}
+For modularity purposes, this program is split into the following Rust modules: \verb|net|, \verb|stats|, \verb|encoding|, \verb|server|, and \verb|client|.
+Most packet creation code, and packet parsing code is in the \verb|net| module.
+The \verb|stats| module is used for collecting runtime stats such as upload speed, download speed, and other future metrics.
+The \verb|encoding| module is used for handling the writing, reading, uploading, and downloading functionality of files.
+The \verb|server| module contains the server code for handling requests.
+The \verb|client| module contains the client code for initializing connections, executing command arguments, and for starting the user shell.
+\subsection{net}
+The purpose of this module is to handle a good amount of the networking code such as generating and parsing packets along with storing relevent constant variables.
+
+\subsection{stats}
+\subsection{encoding}
+\subsection{server}
+\subsection{client}
+
+\section{Experiments}
+\section{Conclusions}
+
+\end{document}
