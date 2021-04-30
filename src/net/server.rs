@@ -10,7 +10,6 @@ struct Connection {
 
 impl Connection {
     fn new(stream: TcpStream) -> Connection {
-        //let encoder = FileEncoder::new(&mut stream);
         Connection { stream }
     }
 

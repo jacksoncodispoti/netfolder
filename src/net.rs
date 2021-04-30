@@ -36,9 +36,55 @@ mod error {
     }
 }
 
+#[derive(Debug)]
+#[derive(Copy)]
+#[derive(Clone)]
+#[derive(PartialEq, Eq)]
+pub enum Code {
+    Unknown=0x0,
+    Upload=0x1,
+    Download=0x2,
+    Delete=0x3,
+    Dir=0x4,
+    Hello=0x5,
+    Redirect=0x6,
+    Okay=0x7,
+    Error=0x8,
+    Data=0x9,
+    Stdout=0xa,
+    End=0xb,
+    Disconnect=0xc
+}
+
+impl Code {
+    pub fn packet(&self) -> [u8; PACKET_SIZE] {
+        let mut packet = [0; PACKET_SIZE];
+        packet[0] = *self as u8;
+        packet
+    }
+
+    pub fn from_u8(value: u8) -> Code {
+        match value {
+            0x0 => Code::Unknown,
+            0x1 => Code::Upload,
+            0x2 => Code::Download,
+            0x3 => Code::Delete,
+            0x4 => Code::Dir,
+            0x5 => Code::Hello,
+            0x6 => Code::Redirect,
+            0x7 => Code::Okay,
+            0x8 => Code::Error,
+            0x9 => Code::Data,
+            0xa => Code::Stdout,
+            0xb => Code::End,
+            0xc => Code::Disconnect,
+            _ => Code::Unknown
+        }
+    }
+}
+
 pub fn create_redirect(filename: &str, port: u16) -> [u8; PACKET_SIZE] {
-    let mut packet = [0; PACKET_SIZE];
-    packet[0] = Code::Redirect as u8;
+    let mut packet = Code::Redirect.packet();
     packet[1] = port as u8;
     packet[2] = (port >> 8) as u8;
 
@@ -52,14 +98,11 @@ pub fn create_redirect(filename: &str, port: u16) -> [u8; PACKET_SIZE] {
 }
 
 pub fn create_okay() -> [u8; PACKET_SIZE] {
-    let mut packet = [0; PACKET_SIZE];
-    packet[0] = Code::Okay as u8;
-    packet
+    Code::Okay.packet()
 }
 
 pub fn create_upload(file_name: &str, id: u16) -> [u8; PACKET_SIZE] {
-    let mut packet = [0; PACKET_SIZE];
-    packet[0] = Code::Upload as u8;
+    let mut packet = Code::Upload.packet();
     packet[1] = id as u8;
     packet[2] = (id >> 8) as u8;
 
@@ -71,8 +114,7 @@ pub fn create_upload(file_name: &str, id: u16) -> [u8; PACKET_SIZE] {
 }
 
 pub fn create_download(file_name: &str) -> [u8; PACKET_SIZE] {
-    let mut packet = [0; PACKET_SIZE];
-    packet[0] = Code::Download as u8;
+    let mut packet = Code::Download.packet();
 
     let mut offset = 1;
     for c in file_name.as_bytes().iter() {
@@ -109,14 +151,11 @@ pub fn parse_download(packet: &[u8; PACKET_SIZE]) -> String {
 
 
 pub fn create_error() -> [u8; PACKET_SIZE] {
-    let mut packet = [0; PACKET_SIZE];
-    packet[0] = Code::Error as u8;
-    packet
+    Code::Error.packet()
 }
 
 pub fn create_delete(file_name: &str) -> [u8; PACKET_SIZE] {
-    let mut packet = [0; PACKET_SIZE];
-    packet[0] = Code::Delete as u8;
+    let mut packet = Code::Delete.packet();
 
     for (i, c) in file_name.as_bytes().iter().enumerate() {
         packet[i + 1] = *c;
@@ -126,8 +165,7 @@ pub fn create_delete(file_name: &str) -> [u8; PACKET_SIZE] {
 }
 
 pub fn create_dir(file_name: &str) -> [u8; PACKET_SIZE] {
-    let mut packet = [0; PACKET_SIZE];
-    packet[0] = Code::Dir as u8;
+    let mut packet = Code::Dir.packet();
 
     for (i, c) in file_name.as_bytes().iter().enumerate() {
         packet[i + 1] = *c;
@@ -188,44 +226,6 @@ pub fn parse_dir(_packet: [u8; PACKET_SIZE]) -> String {
     String::new()
 }
 
-#[derive(Debug)]
-#[derive(PartialEq, Eq)]
-pub enum Code {
-    Unknown=0x0,
-    Upload=0x1,
-    Download=0x2,
-    Delete=0x3,
-    Dir=0x4,
-    Hello=0x5,
-    Redirect=0x6,
-    Okay=0x7,
-    Error=0x8,
-    Data=0x9,
-    Stdout=0xa,
-    End=0xb,
-    Disconnect=0xc
-}
-
-impl Code {
-    pub fn from_u8(value: u8) -> Code {
-        match value {
-            0x0 => Code::Unknown,
-            0x1 => Code::Upload,
-            0x2 => Code::Download,
-            0x3 => Code::Delete,
-            0x4 => Code::Dir,
-            0x5 => Code::Hello,
-            0x6 => Code::Redirect,
-            0x7 => Code::Okay,
-            0x8 => Code::Error,
-            0x9 => Code::Data,
-            0xa => Code::Stdout,
-            0xb => Code::End,
-            0xc => Code::Disconnect,
-            _ => Code::Unknown
-        }
-    }
-}
 
 pub fn parse_packet(packet: &[u8; PACKET_SIZE]) -> Code {
     if packet.is_empty() {
