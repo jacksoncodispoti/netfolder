@@ -8,7 +8,6 @@ use std::mem;
 pub const PACKET_SIZE: usize = 512;
 pub const DATA_OFFSET: usize = 19;
 
-
 #[derive(Debug)]
 #[derive(Copy)]
 #[derive(Clone)]
@@ -56,20 +55,6 @@ impl Code {
     }
 }
 
-pub fn create_redirect(filename: &str, port: u16) -> [u8; PACKET_SIZE] {
-    let mut packet = Code::Redirect.packet();
-    packet[1] = port as u8;
-    packet[2] = (port >> 8) as u8;
-
-    let mut offset = 3;
-    for c in filename.as_bytes().iter() {
-        packet[offset] = *c;
-        offset += 1;
-    }
-
-    packet
-}
-
 pub fn create_upload(file_name: &str, id: u16) -> [u8; PACKET_SIZE] {
     let mut packet = Code::Upload.packet();
     packet[1] = id as u8;
@@ -94,28 +79,6 @@ pub fn create_download(file_name: &str) -> [u8; PACKET_SIZE] {
     packet
 }
 
-pub fn parse_upload(packet: &[u8; PACKET_SIZE]) -> (String, u16) {
-    let b1 = packet[1] as u16;
-    let b2 = packet[2] as u16;
-    let id = (b2 << 8) | b1;
-
-    let mut name = String::new();
-    for c in packet.iter().take(PACKET_SIZE).skip(3) {
-        if *c != 0 {
-            name.push(*c as char);
-        }
-        else {
-            break;
-        }
-    }
-
-    (name, id)
-}
-
-pub fn parse_download(packet: &[u8; PACKET_SIZE]) -> String {
-    String::from(String::from_utf8_lossy(&packet[1..]).into_owned().trim().trim_matches(char::from(0)))
-}
-
 pub fn create_delete(file_name: &str) -> [u8; PACKET_SIZE] {
     let mut packet = Code::Delete.packet();
 
@@ -131,6 +94,20 @@ pub fn create_dir(file_name: &str) -> [u8; PACKET_SIZE] {
 
     for (i, c) in file_name.as_bytes().iter().enumerate() {
         packet[i + 1] = *c;
+    }
+
+    packet
+}
+
+pub fn create_redirect(filename: &str, port: u16) -> [u8; PACKET_SIZE] {
+    let mut packet = Code::Redirect.packet();
+    packet[1] = port as u8;
+    packet[2] = (port >> 8) as u8;
+
+    let mut offset = 3;
+    for c in filename.as_bytes().iter() {
+        packet[offset] = *c;
+        offset += 1;
     }
 
     packet
@@ -157,6 +134,54 @@ pub fn mod_data(packet: &mut [u8; PACKET_SIZE], object: u16, bytes_t: u64, bytes
     packet[11..(8+11)].clone_from_slice(&b2[..8]);
 }
 
+pub fn parse_packet(packet: &[u8; PACKET_SIZE]) -> Code {
+    if packet.is_empty() {
+        Code::Unknown
+    }
+    else {
+        Code::from_u8(packet[0])
+    }
+}
+
+pub fn parse_upload(packet: &[u8; PACKET_SIZE]) -> (String, u16) {
+    let b1 = packet[1] as u16;
+    let b2 = packet[2] as u16;
+    let id = (b2 << 8) | b1;
+
+    let mut name = String::new();
+    for c in packet.iter().take(PACKET_SIZE).skip(3) {
+        if *c != 0 {
+            name.push(*c as char);
+        }
+        else {
+            break;
+        }
+    }
+
+    (name, id)
+}
+
+pub fn parse_download(packet: &[u8; PACKET_SIZE]) -> String {
+    String::from(String::from_utf8_lossy(&packet[1..]).into_owned().trim().trim_matches(char::from(0)))
+}
+
+pub fn parse_delete(packet: [u8; PACKET_SIZE]) -> String {
+    String::from(String::from_utf8_lossy(&packet[1..]).into_owned().trim().trim_matches(char::from(0)))
+}
+
+pub fn parse_dir(_packet: [u8; PACKET_SIZE]) -> String {
+    String::new()
+}
+
+pub fn parse_redirect(packet: [u8; PACKET_SIZE]) -> (u16, String) {
+    let b1 = packet[1] as u16;
+    let b2 = packet[2] as u16;
+
+    let file = String::from(String::from_utf8_lossy(&packet[2..]).into_owned().trim().trim_matches(char::from(0)));
+
+    ((b2 << 8) | b1, file)
+}
+
 pub fn parse_data(packet: [u8; PACKET_SIZE]) -> (u16, u64, usize) {
     let b1 = packet[1] as u16;
     let b2 = packet[2] as u16;
@@ -169,33 +194,6 @@ pub fn parse_data(packet: [u8; PACKET_SIZE]) -> (u16, u64, usize) {
     let total_u = LittleEndian::read_u64(total);
 
     (id, transmitted_u, total_u as usize)
-}
-
-pub fn parse_redirect(packet: [u8; PACKET_SIZE]) -> (u16, String) {
-    let b1 = packet[1] as u16;
-    let b2 = packet[2] as u16;
-
-    let file = String::from(String::from_utf8_lossy(&packet[2..]).into_owned().trim().trim_matches(char::from(0)));
-
-    ((b2 << 8) | b1, file)
-}
-
-pub fn parse_delete(packet: [u8; PACKET_SIZE]) -> String {
-    String::from(String::from_utf8_lossy(&packet[1..]).into_owned().trim().trim_matches(char::from(0)))
-}
-
-pub fn parse_dir(_packet: [u8; PACKET_SIZE]) -> String {
-    String::new()
-}
-
-
-pub fn parse_packet(packet: &[u8; PACKET_SIZE]) -> Code {
-    if packet.is_empty() {
-        Code::Unknown
-    }
-    else {
-        Code::from_u8(packet[0])
-    }
 }
 
 pub struct Connection {
