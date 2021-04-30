@@ -2,7 +2,7 @@ use std::net::{TcpStream};
 use std::fs::File;
 use std::path::Path;
 use std::io::{Read, Write};
-use crate::net;
+use crate::net::{self, parse};
 use crate::stats;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::time::Instant;
@@ -26,12 +26,12 @@ impl FileReceiver {
         let mut current_bytes = 0;
         loop {
             let _bytes = stream.peek(&mut buf);
-            let command = net::parse_packet(&buf) as u8;
+            let command = parse::packet(&buf) as u8;
 
             if command == (net::Code::Data as u8) {
                 //println!("\t{}/{}", current_bytes, 000000);
                 let bytes = stream.read(&mut buf).unwrap();
-                let (_id, _trans, size) = net::parse_data(buf);
+                let (_id, _trans, size) = parse::data(buf);
                 realtime_stats.set_size(size);
 
                 if current_bytes + bytes >= size {
@@ -61,11 +61,11 @@ impl FileReceiver {
 
         loop {
             stream.peek(&mut buf).expect("Unable to peek stream");
-            let command = net::parse_packet(&buf) as u8;
+            let command = parse::packet(&buf) as u8;
 
             if command == (net::Code::Redirect as u8) {
                 stream.read_exact(&mut buf).unwrap();
-                let (port, filename) = net::parse_redirect(buf);
+                let (port, filename) = parse::redirect(buf);
                 let stats = self.get_file(&filename, port, stream);
                 println!("{}", stats);
                 break;

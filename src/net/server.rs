@@ -1,7 +1,7 @@
 use std::net::{TcpListener, TcpStream, IpAddr, SocketAddr, Ipv4Addr};
 use std::io::{Read, Write};
 use crate::encoding::{FileReceiver, FileTransmitter};
-use crate::net::{self, Code};
+use crate::net::{self, Code, parse, create};
 use std::thread;
 
 // Listen for connections and create new thread on connection start
@@ -53,7 +53,7 @@ impl Connection {
             match self.stream.read(&mut buf) {
                 Ok(size) => {
                     if size != 0 {
-                        let code = net::parse_packet(&buf);
+                        let code = parse::packet(&buf);
 
                         if code == net::Code::Disconnect {
                             break;
@@ -71,31 +71,31 @@ impl Connection {
         //println!("[{}] Received code {:?}", addr, command);
         match command {
             Code::Upload => {
-                let (name, id) = net::parse_upload(&packet);
+                let (name, id) = parse::upload(&packet);
                 println!("[{}] Receiving upload: {}", addr, name);
                 let stats = receiver.get_file(&name, id, &mut self.stream);
                 println!("[{}]\t{}: {}", addr, name, stats);
                 net::Code::Okay.packet()
             },
             Code::Delete => {
-                let arg = net::parse_delete(packet);
+                let arg = parse::delete(packet);
                 let _res = receiver.delete_file(&mut self.stream, &arg);
                 net::Code::Okay.packet()
             },
             Code::Dir => {
-                let _arg = net::parse_dir(packet);
+                let _arg = parse::dir(packet);
                 let _res = transmitter.dir("./", &mut self.stream);
                 net::Code::Okay.packet()
             },
             Code::Redirect => {
-                let (port, filename) = net::parse_redirect(packet);
+                let (port, filename) = parse::redirect(packet);
                 let stats = receiver.get_file(&filename, port, &mut self.stream);
                 println!("[{}] {}", addr, stats);
                 net::Code::Okay.packet()
             },
             Code::Download => {
-                let path = net::parse_download(&packet);
-                self.stream.write_all(&net::create_redirect(&path, 0)).expect("Network error");
+                let path = parse::download(&packet);
+                self.stream.write_all(&create::redirect(&path, 0)).expect("Network error");
                 let _stats = transmitter.host_file(&path, &mut self.stream);
                 net::Code::Okay.packet()
             },

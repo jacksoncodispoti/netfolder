@@ -31,7 +31,7 @@ mod commands {
     use std::path::Path;
     use std::io::Write;
     use crate::encoding::{FileTransmitter, FileReceiver};
-    use crate::net;
+    use crate::net::{self, create};
 
     // Connection handling
     pub fn connect(connection: &mut net::Connection, ip: IpAddr, port: u16) {
@@ -46,26 +46,26 @@ mod commands {
 
     // User commands
     pub fn upload(transmitter: &mut FileTransmitter, stream: &mut TcpStream, path: &Path) {
-        let upload_packet = net::create_upload(path.file_name().unwrap().to_str().unwrap(), 0x1);
+        let upload_packet = create::upload(path.file_name().unwrap().to_str().unwrap(), 0x1);
         stream.write_all(&upload_packet).expect("Unable to write to stream");
         let stats = transmitter.host_file(path.to_str().unwrap(), stream);
         println!("{}", stats);
     }
 
     pub fn download(receiver: &mut FileReceiver, stream: &mut TcpStream, path: &str) {
-        let download_packet = net::create_download(path);
+        let download_packet = create::download(path);
         stream.write_all(&download_packet).expect("Unable to write to stream");
         receiver.listen(stream);
     }
 
     pub fn delete(receiver: &mut FileReceiver, stream: &mut TcpStream, path: &str) {
-            let delete_packet = net::create_delete(path);
+            let delete_packet = create::delete(path);
             stream.write_all(&delete_packet).expect("Network error");
             receiver.listen(stream);
     }
 
     pub fn dir(receiver: &mut FileReceiver, stream: &mut TcpStream) {
-        let dir_packet = net::create_dir("");
+        let dir_packet = create::dir("");
         stream.write_all(&dir_packet).expect("Network error");
         receiver.listen(stream);
     }
