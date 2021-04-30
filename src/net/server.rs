@@ -4,6 +4,35 @@ use crate::encoding::{FileReceiver, FileTransmitter};
 use crate::net::{self, Code};
 use std::thread;
 
+// Listen for connections and create new thread on connection start
+pub struct ConnectionListener {
+    _name: String,
+    listener: TcpListener
+}
+
+impl ConnectionListener {
+    pub fn new(name: &str, ip: IpAddr, port: u16) -> ConnectionListener {
+        let addr = SocketAddr::from((ip, port));
+        ConnectionListener{ _name: String::from(name), listener: TcpListener::bind(addr).unwrap() }
+    }
+
+    pub fn connection_loop(&self) {
+        for stream in self.listener.incoming() {
+            match stream {
+                Ok(stream) => {
+                    let mut connection = Connection::new(stream);
+                    //connection.handle();
+                    thread::spawn(move || { connection.handle() });
+                }
+                Err(e) => {
+                    println!("Error accepting incoming connection: {}", e);
+                }
+            };
+        }
+    }
+}
+
+// Server connection
 struct Connection {
     stream: TcpStream,
 }
@@ -75,37 +104,11 @@ impl Connection {
     }
 }
 
-pub struct NetFolderListener {
-    _name: String,
-    listener: TcpListener
-}
-
-impl NetFolderListener {
-    pub fn new(name: &str, ip: IpAddr, port: u16) -> NetFolderListener {
-        let addr = SocketAddr::from((ip, port));
-        NetFolderListener{ _name: String::from(name), listener: TcpListener::bind(addr).unwrap() }
-    }
-
-    pub fn connection_loop(&self) {
-        for stream in self.listener.incoming() {
-            match stream {
-                Ok(stream) => {
-                    let mut connection = Connection::new(stream);
-                    //connection.handle();
-                    thread::spawn(move || { connection.handle() });
-                }
-                Err(e) => {
-                    println!("Error accepting incoming connection: {}", e);
-                }
-            };
-        }
-    }
-}
-
+// Start server
 pub fn start_server(_matches: &clap::ArgMatches) {
     let ip = IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0));
     let port = 3219;
-    let listener = NetFolderListener::new("TheBlackPearl", ip, port);
+    let listener = ConnectionListener::new("TheBlackPearl", ip, port);
 
     listener.connection_loop();
 }
